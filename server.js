@@ -145,16 +145,19 @@ app.post(
     }
     const docRef = snap.docs[0].ref;
 
-    if (status === 'completed' && audioUrl) {
+    if (audioUrl) {
+      // recibimos la URL final de audio, marcamos listo para enviar
       await docRef.update({ audioUrl, status: 'Enviar música' });
       console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
-    } else if (status === 'failed') {
-      await docRef.update({ status: 'Error música', errorMsg });
-      console.warn(`❌ Falló generación música (doc ${docRef.id}):`, errorMsg);
+    } else if (body.error || errorMsg) {
+      // si llegó un error explícito
+      await docRef.update({ status: 'Error música', errorMsg: errorMsg || body.error });
+      console.warn(`❌ Falló generación música (doc ${docRef.id}):`, errorMsg || body.error);
     } else {
-      // Puede que sea un callback intermedio (por ejemplo con preview), lo ignoramos
-      console.log(`ℹ️ Callback intermedio para task ${taskId}: status=${status}`);
+      // callbacks intermedios que no traen audioUrl ni error
+      console.log(`ℹ️ Callback intermedio para task ${taskId}, sin audioUrl ni error.`);
     }
+    
 
     res.sendStatus(200);
   }
