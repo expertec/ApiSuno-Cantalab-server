@@ -116,6 +116,12 @@ app.post(
 );
 
 
+// Recibe callbacks de Suno (puede estar vacío si haces polling)
+app.post('/api/suno/callback', (req, res) => {
+  console.log('🔔 Callback de Suno:', req.body);
+  res.sendStatus(200);
+});
+
 // NUEVA ruta para los audios del chat
 app.post(
   '/api/whatsapp/send-chat-audio',
@@ -177,6 +183,8 @@ app.get('/webhook', (req, res) => {
   }
   return res.sendStatus(403);
 });
+
+
 
 /**
  * Estado de conexión (simple)

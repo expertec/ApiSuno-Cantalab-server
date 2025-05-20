@@ -394,6 +394,7 @@ async function esperarAAudio(taskId) {
 
 
 async function generarMusicaConSuno() {
+  // 1) Sólo un doc con 'Sin música'
   const snap = await db.collection('musica')
     .where('status', '==', 'Sin música')
     .limit(1)
@@ -403,14 +404,27 @@ async function generarMusicaConSuno() {
   const docSnap = snap.docs[0];
   const { stylePrompt, purpose, lyrics } = docSnap.data();
 
-  // lanza la tarea y espera la URL
-  const taskId  = await lanzarTareaSuno({ title: purpose.slice(0, 30), stylePrompt, lyrics });
-  const audioUrl = await esperarAAudio(taskId);
+  // 2) Marca inmediatamente como “Procesando música”
+  await docSnap.ref.update({ status: 'Procesando música' });
 
-  // marca listo para enviar
-  await docSnap.ref.update({ audioUrl, status: 'Enviar música' });
-  console.log(`✅ generarMusicaConSuno: ${docSnap.id}, URL: ${audioUrl}`);
+  try {
+    // 3) Lanza la tarea y espera el resultado
+    const taskId  = await lanzarTareaSuno({ title: purpose.slice(0, 30), stylePrompt, lyrics });
+    const audioUrl = await esperarAAudio(taskId);
+
+    // 4) Guarda la URL y pasa al siguiente estado
+    await docSnap.ref.update({
+      audioUrl,
+      status: 'Enviar música'
+    });
+    console.log(`✅ generarMusicaConSuno: ${docSnap.id}, URL: ${audioUrl}`);
+  } catch (err) {
+    console.error(`❌ Error en generarMusicaConSuno (${docSnap.id}):`, err);
+    // opcional: vuelve a 'Sin música' para reintentar o marca un 'Error música'
+    await docSnap.ref.update({ status: 'Error música' });
+  }
 }
+
 
 
 // 4) Enviar música por WhatsApp (Enviar música → Enviada)
