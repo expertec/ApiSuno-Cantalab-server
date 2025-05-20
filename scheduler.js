@@ -1,7 +1,6 @@
 // src/server/scheduler.js
 import { db } from './firebaseAdmin.js';
 import { sendTextMessage, sendAudioMessage, sendVideoMessage} from './whatsappService.js';
-
 import admin from 'firebase-admin';
 import { Configuration, OpenAIApi } from 'openai';
 import fetch from 'node-fetch';
@@ -340,47 +339,43 @@ Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y 
 }
 
 
-
 // ————————————
 // Helpers Suno
 // ————————————
+
+
+
+async function esperarAAudio(taskId) {
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 4000));
+    const statusRes = await fetch(`https://apibox.erweima.ai/v1/audio/status/${taskId}`, {
+      headers: { Authorization: `Bearer ${process.env.SUNO_API_KEY}` }
+    });
+    const statusJson = await statusRes.json();
+    if (statusJson.status === 'finished' && statusJson.result?.url) {
+      return statusJson.result.url;
+    }
+    if (statusJson.status === 'error') {
+      throw new Error(`Error de Suno: ${statusJson.error}`);
+    }
+  }
+  throw new Error('Timeout esperando audio de Suno');
+}
+
 async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
-  // 1) Inicia la generación:
-  const res = await fetch('https://api.sunoapi.org/v1/audio/generate', {
+  const res = await fetch('https://apibox.erweima.ai/v1/audio/generate', {
     method: 'POST',
     headers: {
-      'Content-Type':'application/json',
+      'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.SUNO_API_KEY}`
     },
-    body: JSON.stringify({
-      prompt: stylePrompt,
-      engine: 'gen2',
-      // metadata opcional, p.ej. title, lyrics, etc
-      tags: { title, lyrics }
-    })
+    body: JSON.stringify({ prompt: stylePrompt, engine: 'gen2', tags: { title, lyrics } })
   });
   const json = await res.json();
   if (!json.taskId) throw new Error('No taskId recibido de Suno');
   return json.taskId;
 }
 
-async function esperarAAudio(taskId) {
-  // 2) Polling hasta que termine:
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 4000));
-    const res = await fetch(`https://api.sunoapi.org/v1/audio/status/${taskId}`, {
-      headers: { Authorization: `Bearer ${process.env.SUNO_API_KEY}` }
-    });
-    const json = await res.json();
-    if (json.status === 'finished' && json.result?.url) {
-      return json.result.url;
-    }
-    if (json.status === 'error') {
-      throw new Error(`Suno error: ${json.error}`);
-    }
-  }
-  throw new Error('Timeout esperando audio de Suno');
-}
 
 async function generarMusicaConSuno() {
   const snap = await db.collection('musica')
@@ -392,45 +387,15 @@ async function generarMusicaConSuno() {
   const docSnap = snap.docs[0];
   const { stylePrompt, purpose, lyrics } = docSnap.data();
 
-  // 1) Lanzar y esperar tarea en Suno (usa tus helpers)
-  const taskId = await lanzarTareaSuno({ title: purpose.slice(0,30), stylePrompt, lyrics });
+  // lanza la tarea y espera la URL
+  const taskId  = await lanzarTareaSuno({ title: purpose.slice(0, 30), stylePrompt, lyrics });
   const audioUrl = await esperarAAudio(taskId);
 
-  // 2) Descargar el MP3
-  const response = await axios.get(audioUrl, { responseType: 'stream' });
-  const tmpFile = path.resolve('/tmp', `${docSnap.id}.mp3`);
-  const writer = fs.createWriteStream(tmpFile);
-  await new Promise((res, rej) => {
-    response.data.pipe(writer);
-    writer.on('finish', res);
-    writer.on('error', rej);
-  });
-
-  // 3) Subir a Firebase Storage
-  const destination = `musica/${docSnap.id}.mp3`;
-  await bucket.upload(tmpFile, {
-    destination,
-    metadata: { contentType: 'audio/mpeg' }
-  });
-  // Option A: si tu bucket es público, basta con:
-  const firebaseUrl = `https://storage.googleapis.com/${bucket.name}/${destination}`;
-  // O bien generas un signed URL:
-  // const [firebaseUrl] = await bucket.file(destination).getSignedUrl({
-  //   action: 'read',
-  //   expires: Date.now() + 365*24*60*60*1000
-  // });
-
-  // 4) Actualizar Firestore
-  await docSnap.ref.update({
-    audioUrl: firebaseUrl,
-    status: 'Enviar música'
-  });
-
-  // 5) Limpieza local
-  fs.unlinkSync(tmpFile);
-
-  console.log(`✅ Música subida a Firebase y lista para enviar: ${firebaseUrl}`);
+  // marca listo para enviar
+  await docSnap.ref.update({ audioUrl, status: 'Enviar música' });
+  console.log(`✅ generarMusicaConSuno: ${docSnap.id}, URL: ${audioUrl}`);
 }
+
 
 // 4) Enviar música por WhatsApp (Enviar música → Enviada)
 async function enviarMusicaPorWhatsApp() {
