@@ -117,53 +117,50 @@ app.post(
 
 // server.js
 
-app.post(
-  '/api/suno/callback',
-  express.json(),
-  async (req, res) => {
-    const raw = req.body;
-    console.log('🔔 Callback de Suno raw:', JSON.stringify(raw, null, 2));
+app.post('/api/suno/callback', express.json(), async (req, res) => {
+  const raw = req.body;
+  console.log('🔔 Callback de Suno raw:', JSON.stringify(raw, null, 2));
 
-    // 1) Extraemos correctamente el taskId (puede venir en varias keys)
-    const taskId =
-      raw.taskId ||
-      raw.data?.taskId ||
-      raw.data?.task_id;
-    if (!taskId) {
-      console.warn('⚠️ Callback sin taskId:', JSON.stringify(raw));
-      return res.sendStatus(400);
+  // 1) Extraemos el taskId
+  const taskId = raw.taskId || raw.data?.taskId || raw.data?.task_id;
+  if (!taskId) {
+    console.warn('⚠️ Callback sin taskId:', JSON.stringify(raw));
+    return res.sendStatus(400);
+  }
+
+  // 2) Sacamos la URL del array data.data
+  let audioUrl;
+  if (Array.isArray(raw.data?.data)) {
+    // buscamos el primer elemento con audio_url no vacío
+    const completeItems = raw.data.data.filter(item => item.audio_url);
+    if (completeItems.length) {
+      audioUrl = completeItems[0].audio_url;
     }
+  }
 
-    // 2) Ignoramos los callbacks intermedios que no traen URL de audio
-    const audioUrl =
-      raw.audio_url ||
-      raw.data?.audio_url ||
-      raw.data?.source_audio_url ||
-      raw.data?.url;
-    if (!audioUrl) {
-      console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
-      return res.sendStatus(200);
-    }
-
-    // 3) Buscamos el doc correspondiente
-    const snap = await db.collection('musica')
-      .where('taskId', '==', taskId)
-      .limit(1)
-      .get();
-
-    if (snap.empty) {
-      console.warn('⚠️ Callback Suno sin task encontrado:', taskId);
-      return res.sendStatus(404);
-    }
-    const docRef = snap.docs[0].ref;
-
-    // 4) Actualizamos con la URL final y cambiamos el status
-    await docRef.update({ audioUrl, status: 'Enviar música' });
-    console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
-
+  if (!audioUrl) {
+    console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
     return res.sendStatus(200);
   }
-);
+
+  // 3) Buscamos el doc en Firestore
+  const snap = await db.collection('musica')
+                       .where('taskId', '==', taskId)
+                       .limit(1)
+                       .get();
+  if (snap.empty) {
+    console.warn('⚠️ Callback Suno sin task encontrado:', taskId);
+    return res.sendStatus(404);
+  }
+  const docRef = snap.docs[0].ref;
+
+  // 4) Actualizamos con la URL y marcamos listo
+  await docRef.update({ audioUrl, status: 'Enviar música' });
+  console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
+
+  res.sendStatus(200);
+});
+
 
 
 
