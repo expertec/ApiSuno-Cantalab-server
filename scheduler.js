@@ -346,28 +346,25 @@ Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y 
 async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
   const res = await fetch('https://apibox.erweima.ai/api/v1/generate', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.SUNO_API_KEY}`
-    },
+    headers: { /*…*/ },
     body: JSON.stringify({
       model:        "V4",
       customMode:   true,
       instrumental: false,
-      title,                    // tu título
+      title,
       style:        stylePrompt,
       prompt:       lyrics,
-      callbackUrl:  process.env.CALLBACK_URL
+      callbackUrl:  process.env.CALLBACK_URL    // <- tu endpoint aquí
     })
   });
-
   const json = await res.json();
   console.log('🛠️ Suno response:', JSON.stringify(json, null, 2));
-  if (json.data?.taskId == null) {
+  if (!json.data?.taskId) {
     throw new Error(`No taskId recibido de Suno. Respuesta: ${JSON.stringify(json)}`);
   }
   return json.data.taskId;
 }
+
 
 
 
@@ -394,36 +391,31 @@ async function esperarAAudio(taskId) {
 
 
 async function generarMusicaConSuno() {
-  // 1) Sólo un doc con 'Sin música'
+  // 1) Selecciona un documento pendiente de música
   const snap = await db.collection('musica')
     .where('status', '==', 'Sin música')
     .limit(1)
     .get();
   if (snap.empty) return;
 
-  const docSnap = snap.docs[0];
-  const { stylePrompt, purpose, lyrics } = docSnap.data();
+  const docRef = snap.docs[0].ref;
+  const { stylePrompt, purpose, lyrics } = snap.docs[0].data();
 
-  // 2) Marca inmediatamente como “Procesando música”
-  await docSnap.ref.update({ status: 'Procesando música' });
+  // 2) Marca como “Procesando música”
+  await docRef.update({ status: 'Procesando música' });
 
-  try {
-    // 3) Lanza la tarea y espera el resultado
-    const taskId  = await lanzarTareaSuno({ title: purpose.slice(0, 30), stylePrompt, lyrics });
-    const audioUrl = await esperarAAudio(taskId);
+  // 3) Lanza la tarea en Suno y guarda el taskId
+  const taskId = await lanzarTareaSuno({
+    title: purpose.slice(0, 30),
+    stylePrompt,
+    lyrics
+  });
+  await docRef.update({ taskId });
 
-    // 4) Guarda la URL y pasa al siguiente estado
-    await docSnap.ref.update({
-      audioUrl,
-      status: 'Enviar música'
-    });
-    console.log(`✅ generarMusicaConSuno: ${docSnap.id}, URL: ${audioUrl}`);
-  } catch (err) {
-    console.error(`❌ Error en generarMusicaConSuno (${docSnap.id}):`, err);
-    // opcional: vuelve a 'Sin música' para reintentar o marca un 'Error música'
-    await docSnap.ref.update({ status: 'Error música' });
-  }
+  console.log(`🔔 generarMusicaConSuno: lanzado task ${taskId} para ${docRef.id}`);
 }
+
+
 
 
 

@@ -115,12 +115,33 @@ app.post(
   }
 );
 
+// server.js (asegúrate de importar db y express.json())
+app.post('/api/suno/callback', express.json(), async (req, res) => {
+  console.log('🔔 Callback de Suno:', JSON.stringify(req.body, null, 2));
+  const { taskId, status, url, error } = req.body.data || {};
 
-// Recibe callbacks de Suno (puede estar vacío si haces polling)
-app.post('/api/suno/callback', (req, res) => {
-  console.log('🔔 Callback de Suno:', req.body);
+  // Busca el doc en Firestore que tenga este taskId
+  const snap = await db.collection('musica')
+    .where('taskId', '==', taskId)
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    console.warn('Callback Suno sin task encontrado:', taskId);
+    return res.sendStatus(404);
+  }
+
+  const docRef = snap.docs[0].ref;
+  if (status === 'completed' && url) {
+    await docRef.update({ audioUrl: url, status: 'Enviar música' });
+  } else if (status === 'failed') {
+    await docRef.update({ status: 'Error música', errorMsg: error });
+  }
+
   res.sendStatus(200);
 });
+
+
 
 // NUEVA ruta para los audios del chat
 app.post(
