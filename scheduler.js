@@ -343,78 +343,86 @@ Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y 
 // Helpers Suno
 // ————————————
 
+/**
+ * Lanza la generación de música en Suno y retorna el taskId.
+ */
 async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
-  const res = await fetch('https://apibox.erweima.ai/api/v1/generate', {
-    method: 'POST',
-    headers: { /*…*/ },
-    body: JSON.stringify({
-      model:        "V4",
-      customMode:   true,
-      instrumental: false,
-      title,
-      style:        stylePrompt,
-      prompt:       lyrics,
-      callbackUrl:  process.env.CALLBACK_URL    // <- tu endpoint aquí
-    })
+  const url = 'https://apibox.erweima.ai/api/v1/generate';
+  const body = {
+    model:        "V4",
+    customMode:   true,
+    instrumental: false,
+    title,
+    style:        stylePrompt,
+    prompt:       lyrics,
+    callbackUrl:  process.env.CALLBACK_URL
+  };
+
+  console.log('🛠️ Suno request:', {
+    headers: {
+      Authorization: `Bearer ${process.env.SUNO_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body
   });
-  const json = await res.json();
-  console.log('🛠️ Suno response:', JSON.stringify(json, null, 2));
-  if (!json.data?.taskId) {
-    throw new Error(`No taskId recibido de Suno. Respuesta: ${JSON.stringify(json)}`);
+
+  const res = await axios.post(url, body, {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization:  `Bearer ${process.env.SUNO_API_KEY}`
+    }
+  });
+
+  console.log('🛠️ Suno response:', res.status, res.data);
+
+  if (res.data.code !== 200 || !res.data.data?.taskId) {
+    throw new Error(`No taskId recibido de Suno. Respuesta: ${JSON.stringify(res.data)}`);
   }
-  return json.data.taskId;
+
+  return res.data.data.taskId;
 }
 
 
-
-
-async function esperarAAudio(taskId) {
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 5000));
-    const statusRes = await fetch(
-      `https://apibox.erweima.ai/api/v1/status/${taskId}`,
-      { headers: { Authorization: `Bearer ${process.env.SUNO_API_KEY}` } }
-    );
-    const statusJson = await statusRes.json();
-    const state = statusJson.data?.status;
-    if (state === 'completed' && statusJson.data.url) {
-      return statusJson.data.url;
-    }
-    if (state === 'failed') {
-      throw new Error('La generación falló');
-    }
-  }
-  throw new Error('Timeout esperando audio de Suno');
-}
-
-
-
-
+/**
+ * Busca un documento con status 'Sin música', lanza la tarea en Suno
+ * y guarda el taskId en Firestore. El webhook se encargará de actualizar
+ * al completarse o fallar.
+ */
 async function generarMusicaConSuno() {
-  // 1) Selecciona un documento pendiente de música
+  // 1) Selecciona un documento pendiente
   const snap = await db.collection('musica')
     .where('status', '==', 'Sin música')
     .limit(1)
     .get();
   if (snap.empty) return;
 
-  const docRef = snap.docs[0].ref;
-  const { stylePrompt, purpose, lyrics } = snap.docs[0].data();
+  const doc = snap.docs[0];
+  const docRef = doc.ref;
+  const { stylePrompt, purpose, lyrics } = doc.data();
 
   // 2) Marca como “Procesando música”
   await docRef.update({ status: 'Procesando música' });
 
-  // 3) Lanza la tarea en Suno y guarda el taskId
-  const taskId = await lanzarTareaSuno({
-    title: purpose.slice(0, 30),
-    stylePrompt,
-    lyrics
-  });
-  await docRef.update({ taskId });
+  try {
+    // 3) Lanza la tarea y guarda el taskId
+    const taskId = await lanzarTareaSuno({
+      title: purpose.slice(0, 30),
+      stylePrompt,
+      lyrics
+    });
+    await docRef.update({ taskId });
 
-  console.log(`🔔 generarMusicaConSuno: lanzado task ${taskId} para ${docRef.id}`);
+    console.log(`🔔 generarMusicaConSuno: lanzado task ${taskId} para ${docRef.id}`);
+  } catch (err) {
+    console.error(`❌ Error en generarMusicaConSuno (${docRef.id}):`, err.message);
+    // Marca error para no reintentar indefinidamente
+    await docRef.update({
+      status: 'Error música',
+      errorMsg: err.message,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+  }
 }
-
 
 
 
