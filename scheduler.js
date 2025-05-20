@@ -343,7 +343,20 @@ Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y 
 // Helpers Suno
 // ————————————
 
-
+// — Helpers Suno —
+async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
+  const res = await fetch('https://apibox.erweima.ai/v1/audio/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.SUNO_API_KEY}`
+    },
+    body: JSON.stringify({ prompt: stylePrompt, engine: 'gen2', tags: { title, lyrics } })
+  });
+  const json = await res.json();
+  if (!json.taskId) throw new Error('No taskId recibido de Suno');
+  return json.taskId;
+}
 
 async function esperarAAudio(taskId) {
   for (let i = 0; i < 30; i++) {
@@ -362,19 +375,6 @@ async function esperarAAudio(taskId) {
   throw new Error('Timeout esperando audio de Suno');
 }
 
-async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
-  const res = await fetch('https://apibox.erweima.ai/v1/audio/generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.SUNO_API_KEY}`
-    },
-    body: JSON.stringify({ prompt: stylePrompt, engine: 'gen2', tags: { title, lyrics } })
-  });
-  const json = await res.json();
-  if (!json.taskId) throw new Error('No taskId recibido de Suno');
-  return json.taskId;
-}
 
 
 async function generarMusicaConSuno() {
