@@ -4,6 +4,8 @@ import { sendTextMessage, sendAudioMessage, sendVideoMessage} from './whatsappSe
 
 import admin from 'firebase-admin';
 import { Configuration, OpenAIApi } from 'openai';
+import fetch from 'node-fetch';
+
 
 const { FieldValue } = admin.firestore;
 
@@ -274,8 +276,124 @@ async function sendLetras() {
   }
 }
 
+
+async function generarLetraParaMusica() {
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Sin letra')
+    .limit(1)
+    .get();
+  if (snap.empty) return;
+
+  const docSnap = snap.docs[0];
+  const d       = docSnap.data();
+  const prompt = `
+Escribe una letra de canción con lenguaje simple siguiendo esta estructura:
+verso 1, verso 2, coro, verso 3, verso 4 y coro.
+Agrega título en negritas.
+Propósito: ${d.purpose}.
+Nombre: ${d.includeName}.
+Anecdotas: ${d.anecdotes}.
+  `.trim();
+
+  const resp = await openai.createChatCompletion({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: 'Eres un compositor creativo.' },
+      { role: 'user',   content: prompt }
+    ],
+    max_tokens: 400,
+  });
+  const letra = resp.data.choices?.[0]?.message?.content?.trim();
+  if (!letra) throw new Error(`No letra para ${docSnap.id}`);
+
+  await docSnap.ref.update({
+    lyrics: letra,
+    status: 'Sin prompt',
+    lyricsGeneratedAt: FieldValue.serverTimestamp()
+  });
+  console.log(`✅ generarLetraParaMusica: ${docSnap.id}`);
+}
+
+// 2) Generar stylePrompt (Sin prompt → Sin música)
+async function generarPromptParaMusica() {
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Sin prompt')
+    .limit(1)
+    .get();
+  if (snap.empty) return;
+
+  const docSnap = snap.docs[0];
+  const { artist, genre, voiceType } = docSnap.data();
+  const stylePrompt = `
+Crea un prompt para Suno que genere una canción estilo éxitos de ${artist}, género ${genre}, voz ${voiceType}.
+Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y atmósfera.
+  `.trim();
+
+  await docSnap.ref.update({
+    stylePrompt,
+    status: 'Sin música'
+  });
+  console.log(`✅ generarPromptParaMusica: ${docSnap.id}`);
+}
+
+// 3) Generar música con Suno (Sin música → Enviar música)
+async function generarMusicaConSuno() {
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Sin música')
+    .limit(1)
+    .get();
+  if (snap.empty) return;
+
+  const docSnap = snap.docs[0];
+  const { stylePrompt } = docSnap.data();
+  const res = await fetch('https://api.sunoapi.org/v1/audio/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type':'application/json',
+      Authorization: `Bearer ${process.env.SUNO_API_KEY}`
+    },
+    body: JSON.stringify({ prompt: stylePrompt, engine: 'gen2' })
+  });
+  const json = await res.json();
+  const audioUrl = json.data?.url;
+  if (!audioUrl) throw new Error(`No audioUrl para ${docSnap.id}`);
+
+  await docSnap.ref.update({
+    audioUrl,
+    status: 'Enviar música'
+  });
+  console.log(`✅ generarMusicaConSuno: ${docSnap.id}`);
+}
+
+// 4) Enviar música por WhatsApp (Enviar música → Enviada)
+async function enviarMusicaPorWhatsApp() {
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Enviar música')
+    .limit(1)
+    .get();
+  if (snap.empty) return;
+
+  const docSnap = snap.docs[0];
+  const { leadPhone, audioUrl } = docSnap.data();
+  const phoneClean = (leadPhone || '').replace(/\D/g, '');
+  if (!audioUrl || !phoneClean) throw new Error(`Faltan datos para ${docSnap.id}`);
+
+  await sendAudioMessage(phoneClean, audioUrl);
+  await docSnap.ref.update({
+    status: 'Enviada',
+    sentAt: FieldValue.serverTimestamp()
+  });
+  console.log(`✅ enviarMusicaPorWhatsApp: ${docSnap.id}`);
+}
+
+
+
 export {
   processSequences,
   generateLetras,
-  sendLetras
+  sendLetras,
+  generarLetraParaMusica,
+  generarPromptParaMusica,
+  generarMusicaConSuno,
+  enviarMusicaPorWhatsApp
 };

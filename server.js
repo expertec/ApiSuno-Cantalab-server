@@ -15,7 +15,17 @@ import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { admin, db } from './firebaseAdmin.js';
 
 import { sendTextMessage, sendAudioMessage } from './whatsappService.js';
-import { processSequences, generateLetras, sendLetras } from './scheduler.js';
+import {
+  processSequences,
+  generateLetras,
+  sendLetras,
+  generarLetraParaMusica,
+  generarPromptParaMusica,
+  generarMusicaConSuno,
+  enviarMusicaPorWhatsApp
+} from './scheduler.js';
+
+
 
 
 
@@ -378,6 +388,19 @@ cron.schedule('* * * * *', () => {
   sendLetras().catch(err => console.error('Error en sendLetras:', err));
 });
 
+// NUEVOS cron jobs para música
+cron.schedule('* * * * *', () => {
+  generarLetraParaMusica().catch(err => console.error('Error en generarLetraParaMusica:', err));
+});
+cron.schedule('* * * * *', () => {
+  generarPromptParaMusica().catch(err => console.error('Error en generarPromptParaMusica:', err));
+});
+cron.schedule('* * * * *', () => {
+  generarMusicaConSuno().catch(err => console.error('Error en generarMusicaConSuno:', err));
+});
+cron.schedule('* * * * *', () => {
+  enviarMusicaPorWhatsApp().catch(err => console.error('Error en enviarMusicaPorWhatsApp:', err));
+});
 
 // Debe ir antes de app.listen(...)
 app.get('/api/media', async (req, res) => {
