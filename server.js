@@ -395,9 +395,11 @@ cron.schedule('* * * * *', () => {
 cron.schedule('* * * * *', () => {
   generarPromptParaMusica().catch(err => console.error('Error en generarPromptParaMusica:', err));
 });
+import { generarMusicaConSuno } from './scheduler.js';
 cron.schedule('* * * * *', () => {
-  generarMusicaConSuno().catch(err => console.error('Error en generarMusicaConSuno:', err));
+  generarMusicaConSuno().catch(console.error);
 });
+
 cron.schedule('* * * * *', () => {
   enviarMusicaPorWhatsApp().catch(err => console.error('Error en enviarMusicaPorWhatsApp:', err));
 });
