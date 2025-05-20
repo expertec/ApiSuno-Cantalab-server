@@ -27,8 +27,6 @@ import {
 
 
 
-
-
 dotenv.config();
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -395,7 +393,7 @@ cron.schedule('* * * * *', () => {
 cron.schedule('* * * * *', () => {
   generarPromptParaMusica().catch(err => console.error('Error en generarPromptParaMusica:', err));
 });
-import { generarMusicaConSuno } from './scheduler.js';
+
 cron.schedule('* * * * *', () => {
   generarMusicaConSuno().catch(console.error);
 });
