@@ -346,8 +346,11 @@ Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y 
 /**
  * Lanza la generación de música en Suno y retorna el taskId.
  */
+/**
+ * Lanza la generación de música en Suno y retorna el taskId.
+ */
 async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
-  const url = 'https://apibox.erweima.ai/api/v1/generate';
+  const url  = 'https://apibox.erweima.ai/api/v1/generate';
   const body = {
     model:        "V4",
     customMode:   true,
@@ -355,46 +358,38 @@ async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
     title,
     style:        stylePrompt,
     prompt:       lyrics,
-    callbackUrl:  process.env.CALLBACK_URL
+    callbackUrl:  process.env.CALLBACK_URL  // tu endpoint /api/suno/callback
   };
 
-  console.log('🛠️ Suno request:', {
-    headers: {
-      Authorization: `Bearer ${process.env.SUNO_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body
-  });
-
+  console.log('🛠️ Suno request:', { body });
   const res = await axios.post(url, body, {
     headers: {
       'Content-Type': 'application/json',
       Authorization:  `Bearer ${process.env.SUNO_API_KEY}`
     }
   });
-
   console.log('🛠️ Suno response:', res.status, res.data);
 
   if (res.data.code !== 200 || !res.data.data?.taskId) {
     throw new Error(`No taskId recibido de Suno. Respuesta: ${JSON.stringify(res.data)}`);
   }
-
   return res.data.data.taskId;
 }
+
 
 
 /**
  * Busca un documento con status 'Sin música', lanza la tarea en Suno
  * y guarda el taskId en Firestore. El webhook se encargará de actualizar
- * al completarse o fallar.
+ * el audioUrl y el status cuando Suno lo notifique.
  */
 async function generarMusicaConSuno() {
-  // 1) Selecciona un documento pendiente
+  // 1) Selecciona un documento pendiente de música
   const snap = await db.collection('musica')
     .where('status', '==', 'Sin música')
     .limit(1)
     .get();
-  if (snap.empty) return;
+  if (snap.empty) return;  // no hay nada que procesar
 
   const doc = snap.docs[0];
   const docRef = doc.ref;
@@ -406,7 +401,7 @@ async function generarMusicaConSuno() {
   try {
     // 3) Lanza la tarea y guarda el taskId
     const taskId = await lanzarTareaSuno({
-      title: purpose.slice(0, 30),
+      title: purpose.slice(0, 30),   // Suno permite hasta 30 chars
       stylePrompt,
       lyrics
     });
@@ -417,12 +412,13 @@ async function generarMusicaConSuno() {
     console.error(`❌ Error en generarMusicaConSuno (${docRef.id}):`, err.message);
     // Marca error para no reintentar indefinidamente
     await docRef.update({
-      status: 'Error música',
-      errorMsg: err.message,
-      updatedAt: FieldValue.serverTimestamp()
+      status:     'Error música',
+      errorMsg:   err.message,
+      updatedAt:  FieldValue.serverTimestamp()
     });
   }
 }
+
 
 
 
