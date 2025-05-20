@@ -115,31 +115,51 @@ app.post(
   }
 );
 
-// server.js (asegúrate de importar db y express.json())
-app.post('/api/suno/callback', express.json(), async (req, res) => {
-  console.log('🔔 Callback de Suno:', JSON.stringify(req.body, null, 2));
-  const { taskId, status, url, error } = req.body.data || {};
+// server.js
 
-  // Busca el doc en Firestore que tenga este taskId
-  const snap = await db.collection('musica')
-    .where('taskId', '==', taskId)
-    .limit(1)
-    .get();
+app.post(
+  '/api/suno/callback',
+  express.json(),
+  async (req, res) => {
+    console.log('🔔 Callback de Suno raw:', JSON.stringify(req.body, null, 2));
+    const body = req.body;
 
-  if (snap.empty) {
-    console.warn('Callback Suno sin task encontrado:', taskId);
-    return res.sendStatus(404);
+    // Suno te manda taskId y status (y distintos campos de URL)
+    const taskId = body.taskId || body.data?.taskId;
+    const status = body.status || body.data?.status;
+    // la URL real viene como 'source_audio_url'
+    const audioUrl = body.source_audio_url 
+                   || body.data?.source_audio_url 
+                   || body.data?.url;
+    const errorMsg = body.error || body.errorMsg || body.data?.error;
+
+    // Busca el doc en Firestore que tenga este taskId
+    const snap = await db.collection('musica')
+      .where('taskId', '==', taskId)
+      .limit(1)
+      .get();
+
+    if (snap.empty) {
+      console.warn('Callback Suno sin task encontrado:', taskId);
+      return res.sendStatus(404);
+    }
+    const docRef = snap.docs[0].ref;
+
+    if (status === 'completed' && audioUrl) {
+      await docRef.update({ audioUrl, status: 'Enviar música' });
+      console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
+    } else if (status === 'failed') {
+      await docRef.update({ status: 'Error música', errorMsg });
+      console.warn(`❌ Falló generación música (doc ${docRef.id}):`, errorMsg);
+    } else {
+      // Puede que sea un callback intermedio (por ejemplo con preview), lo ignoramos
+      console.log(`ℹ️ Callback intermedio para task ${taskId}: status=${status}`);
+    }
+
+    res.sendStatus(200);
   }
+);
 
-  const docRef = snap.docs[0].ref;
-  if (status === 'completed' && url) {
-    await docRef.update({ audioUrl: url, status: 'Enviar música' });
-  } else if (status === 'failed') {
-    await docRef.update({ status: 'Error música', errorMsg: error });
-  }
-
-  res.sendStatus(200);
-});
 
 
 
