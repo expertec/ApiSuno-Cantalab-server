@@ -121,47 +121,50 @@ app.post(
   '/api/suno/callback',
   express.json(),
   async (req, res) => {
-    console.log('🔔 Callback de Suno raw:', JSON.stringify(req.body, null, 2));
-    const body = req.body;
+    const raw = req.body;
+    console.log('🔔 Callback de Suno raw:', JSON.stringify(raw, null, 2));
 
-    // Suno te manda taskId y status (y distintos campos de URL)
-    const taskId = body.taskId || body.data?.taskId;
-    const status = body.status || body.data?.status;
-    // la URL real viene como 'source_audio_url'
-    const audioUrl = body.source_audio_url 
-                   || body.data?.source_audio_url 
-                   || body.data?.url;
-    const errorMsg = body.error || body.errorMsg || body.data?.error;
+    // 1) Extraemos correctamente el taskId (puede venir en varias keys)
+    const taskId =
+      raw.taskId ||
+      raw.data?.taskId ||
+      raw.data?.task_id;
+    if (!taskId) {
+      console.warn('⚠️ Callback sin taskId:', JSON.stringify(raw));
+      return res.sendStatus(400);
+    }
 
-    // Busca el doc en Firestore que tenga este taskId
+    // 2) Ignoramos los callbacks intermedios que no traen URL de audio
+    const audioUrl =
+      raw.audio_url ||
+      raw.data?.audio_url ||
+      raw.data?.source_audio_url ||
+      raw.data?.url;
+    if (!audioUrl) {
+      console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
+      return res.sendStatus(200);
+    }
+
+    // 3) Buscamos el doc correspondiente
     const snap = await db.collection('musica')
       .where('taskId', '==', taskId)
       .limit(1)
       .get();
 
     if (snap.empty) {
-      console.warn('Callback Suno sin task encontrado:', taskId);
+      console.warn('⚠️ Callback Suno sin task encontrado:', taskId);
       return res.sendStatus(404);
     }
     const docRef = snap.docs[0].ref;
 
-    if (audioUrl) {
-      // recibimos la URL final de audio, marcamos listo para enviar
-      await docRef.update({ audioUrl, status: 'Enviar música' });
-      console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
-    } else if (body.error || errorMsg) {
-      // si llegó un error explícito
-      await docRef.update({ status: 'Error música', errorMsg: errorMsg || body.error });
-      console.warn(`❌ Falló generación música (doc ${docRef.id}):`, errorMsg || body.error);
-    } else {
-      // callbacks intermedios que no traen audioUrl ni error
-      console.log(`ℹ️ Callback intermedio para task ${taskId}, sin audioUrl ni error.`);
-    }
-    
+    // 4) Actualizamos con la URL final y cambiamos el status
+    await docRef.update({ audioUrl, status: 'Enviar música' });
+    console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
 
-    res.sendStatus(200);
+    return res.sendStatus(200);
   }
 );
+
 
 
 
