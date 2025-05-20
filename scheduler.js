@@ -343,37 +343,53 @@ Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y 
 // Helpers Suno
 // ————————————
 
-// — Helpers Suno —
 async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
-  const res = await fetch('https://apibox.erweima.ai/v1/audio/generate', {
+  const res = await fetch('https://apibox.erweima.ai/api/v1/generate', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.SUNO_API_KEY}`
     },
-    body: JSON.stringify({ prompt: stylePrompt, engine: 'gen2', tags: { title, lyrics } })
+    body: JSON.stringify({
+      model:        "V4",
+      customMode:   true,
+      instrumental: false,
+      title,                    // tu título
+      style:        stylePrompt,
+      prompt:       lyrics,
+      callbackUrl:  process.env.CALLBACK_URL
+    })
   });
+
   const json = await res.json();
-  if (!json.taskId) throw new Error('No taskId recibido de Suno');
-  return json.taskId;
+  console.log('🛠️ Suno response:', JSON.stringify(json, null, 2));
+  if (json.data?.taskId == null) {
+    throw new Error(`No taskId recibido de Suno. Respuesta: ${JSON.stringify(json)}`);
+  }
+  return json.data.taskId;
 }
+
+
 
 async function esperarAAudio(taskId) {
   for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 4000));
-    const statusRes = await fetch(`https://apibox.erweima.ai/v1/audio/status/${taskId}`, {
-      headers: { Authorization: `Bearer ${process.env.SUNO_API_KEY}` }
-    });
+    await new Promise(r => setTimeout(r, 5000));
+    const statusRes = await fetch(
+      `https://apibox.erweima.ai/api/v1/status/${taskId}`,
+      { headers: { Authorization: `Bearer ${process.env.SUNO_API_KEY}` } }
+    );
     const statusJson = await statusRes.json();
-    if (statusJson.status === 'finished' && statusJson.result?.url) {
-      return statusJson.result.url;
+    const state = statusJson.data?.status;
+    if (state === 'completed' && statusJson.data.url) {
+      return statusJson.data.url;
     }
-    if (statusJson.status === 'error') {
-      throw new Error(`Error de Suno: ${statusJson.error}`);
+    if (state === 'failed') {
+      throw new Error('La generación falló');
     }
   }
   throw new Error('Timeout esperando audio de Suno');
 }
+
 
 
 
