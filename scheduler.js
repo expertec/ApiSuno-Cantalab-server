@@ -316,8 +316,12 @@ Anecdotas: ${d.anecdotes}.
   console.log(`✅ generarLetraParaMusica: ${docSnap.id}`);
 }
 
-// 2) Generar stylePrompt (Sin prompt → Sin música)
+/**
+ * Genera y refina automáticamente el prompt para Suno usando ChatGPT.
+ * Pasa de status 'Sin prompt' → 'Sin música'.
+ */
 async function generarPromptParaMusica() {
+  // 1) Recupera un documento pendiente
   const snap = await db.collection('musica')
     .where('status', '==', 'Sin prompt')
     .limit(1)
@@ -326,17 +330,36 @@ async function generarPromptParaMusica() {
 
   const docSnap = snap.docs[0];
   const { artist, genre, voiceType } = docSnap.data();
-  const stylePrompt = `
+
+  // 2) Borrador del prompt
+  const draft = `
 Crea un prompt para Suno que genere una canción estilo éxitos de ${artist}, género ${genre}, voz ${voiceType}.
-Máximo 120 caracteres, separados por comas; enfócate en ritmo, instrumentos y atmósfera.
+Sin mencionar al artista; céntrate en ritmo, instrumentos y atmósfera. Máximo 120 caracteres,
+elementos separados por comas.
   `.trim();
 
+  // 3) Usa ChatGPT para refinar el borrador
+  const gptRes = await openai.createChatCompletion({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: 'Eres un redactor creativo de prompts musicales.' },
+      { role: 'user', content: `Refina este borrador para que tenga menos de 120 caracteres y sólo liste los elementos separados por comas: "${draft}"` }
+    ]
+  });
+
+  const stylePrompt = gptRes.data.choices[0].message.content.trim();
+
+  // 4) Guarda el prompt refinado en Firestore y avanza el estado
   await docSnap.ref.update({
     stylePrompt,
     status: 'Sin música'
   });
-  console.log(`✅ generarPromptParaMusica: ${docSnap.id}`);
+
+  console.log(`✅ generarPromptParaMusica: ${docSnap.id} → "${stylePrompt}"`);
 }
+
+
+
 
 
 // ————————————
