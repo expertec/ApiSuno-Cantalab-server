@@ -115,7 +115,6 @@ app.post(
   }
 );
 
-// server.js
 
 app.post('/api/suno/callback', express.json(), async (req, res) => {
   const raw = req.body;
@@ -128,47 +127,74 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
     return res.sendStatus(400);
   }
 
-  // 2) Sacamos la URL del array data.data
-
-let audioUrl;
-if (Array.isArray(raw.data?.data)) {
-  // buscamos el primer elemento con audio_url o source_audio_url no vacío
-  const completeItems = raw.data.data.filter(item =>
-    (item.audio_url && item.audio_url.trim()) ||
-    (item.source_audio_url && item.source_audio_url.trim())
-  );
-  if (completeItems.length) {
-    const first = completeItems[0];
-    audioUrl = first.audio_url || first.source_audio_url;
+  // 2) Sacamos la URL privada del audio del array data.data
+  let audioUrlPrivada = null;
+  if (Array.isArray(raw.data?.data)) {
+    const done = raw.data.data.find(item =>
+      (item.audio_url || item.source_audio_url)?.trim()
+    );
+    if (done) {
+      audioUrlPrivada = done.audio_url || done.source_audio_url;
+    }
   }
-}
 
-
-  if (!audioUrl) {
+  // Si no está listo, devolvemos 200 y esperamos más callbacks
+  if (!audioUrlPrivada) {
     console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
     return res.sendStatus(200);
   }
 
-  // 3) Buscamos el doc en Firestore
+  // 3) Localizamos el doc en Firestore
   const snap = await db.collection('musica')
-                       .where('taskId', '==', taskId)
-                       .limit(1)
-                       .get();
+    .where('taskId', '==', taskId)
+    .limit(1)
+    .get();
   if (snap.empty) {
     console.warn('⚠️ Callback Suno sin task encontrado:', taskId);
     return res.sendStatus(404);
   }
   const docRef = snap.docs[0].ref;
 
-  // 4) Actualizamos con la URL y marcamos listo
-  await docRef.update({ audioUrl, status: 'Enviar música' });
-  console.log(`✅ Música lista para enviar (doc ${docRef.id})`);
+  try {
+    // 4) Descargamos el MP3 a un archivo temporal
+    const tmpFile = path.resolve('/tmp', `${taskId}.mp3`);
+    const downloadRes = await axios.get(audioUrlPrivada, { responseType: 'stream' });
+    await new Promise((resolve, reject) => {
+      const writer = fs.createWriteStream(tmpFile);
+      downloadRes.data.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
 
-  res.sendStatus(200);
+    // 5) Subimos el MP3 a tu bucket de Firebase
+    const destino = `musica/${taskId}.mp3`;
+    await bucket.upload(tmpFile, {
+      destination: destino,
+      metadata: { contentType: 'audio/mpeg' }
+    });
+
+    // 6) Generamos un signed URL público (válido 24 h)
+    const [publicUrl] = await bucket
+      .file(destino)
+      .getSignedUrl({ action: 'read', expires: Date.now() + 24 * 60 * 60 * 1000 });
+
+    // 7) Actualizamos Firestore con el URL público y el nuevo estado
+    await docRef.update({
+      audioUrl: publicUrl,
+      status:   'Enviar música'
+    });
+    console.log(`✅ Música subida y lista en ${publicUrl} para doc ${docRef.id}`);
+
+    // 8) Limpiamos el TMP
+    fs.unlinkSync(tmpFile);
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Error procesando callback de Suno:', err);
+    await docRef.update({ status: 'Error música', errorMsg: err.message });
+    res.sendStatus(500);
+  }
 });
-
-
-
 
 
 
