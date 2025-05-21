@@ -452,23 +452,38 @@ async function generarMusicaConSuno() {
  */
 // scheduler.js, en lugar de hacer un axios.post manual:
 async function enviarMusicaPorWhatsApp() {
+  // 1) Busca el primer doc listo para enviar
   const snap = await db.collection('musica')
-    .where('status','==','Enviar música')
+    .where('status', '==', 'Enviar música')
     .limit(1)
     .get();
   if (snap.empty) return;
 
   const doc = snap.docs[0];
-  const { leadPhone, audioUrl } = doc.data();
-  const phoneClean = (leadPhone||'').replace(/\D/g, '');
-  if (!audioUrl || !phoneClean) throw new Error(`Faltan datos para ${doc.id}`);
+  // 2) De la colección ahora esperamos que hayas guardado:
+  //    - fullUrl   (el mp3 completo)
+  //    - clipUrl   (el mp3 de 30 s con watermark)
+  //    - leadPhone (el teléfono del lead)
+  const { leadPhone, clipUrl } = doc.data();
 
-  // REEMPLAZAMOS el axios.post manual por:
-  await sendAudioMessage(phoneClean, audioUrl);
+  // 3) Limpia caracteres y valídalo
+  const phoneClean = (leadPhone || '').replace(/\D/g, '');
+  if (!clipUrl || !phoneClean) {
+    throw new Error(`Faltan datos para doc ${doc.id}`);
+  }
 
-  await doc.ref.update({ status: 'Enviada', sentAt: FieldValue.serverTimestamp() });
-  console.log(`✅ Música enviada por WhatsApp al lead ${phoneClean} (doc ${doc.id})`);
+  // 4) Envía por WhatsApp **el clip** de 30 s
+  await sendAudioMessage(phoneClean, clipUrl);
+
+  // 5) Marca como enviada en Firestore
+  await doc.ref.update({
+    status: 'Enviada',
+    sentAt: FieldValue.serverTimestamp()
+  });
+
+  console.log(`✅ Clip de música enviado al lead ${phoneClean} (doc ${doc.id})`);
 }
+
 
 
 

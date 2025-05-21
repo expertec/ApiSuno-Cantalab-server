@@ -120,14 +120,14 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
   const raw = req.body;
   console.log('🔔 Callback de Suno raw:', JSON.stringify(raw, null, 2));
 
-  // 1) Extraemos el taskId
+  // 1) Extraer taskId
   const taskId = raw.taskId || raw.data?.taskId || raw.data?.task_id;
   if (!taskId) {
-    console.warn('⚠️ Callback sin taskId:', JSON.stringify(raw));
+    console.warn('⚠️ Callback sin taskId:', raw);
     return res.sendStatus(400);
   }
 
-  // 2) Sacamos la URL privada del audio del array data.data
+  // 2) Extraer URL privada de audio (esperar solo 'complete')
   let audioUrlPrivada = null;
   if (Array.isArray(raw.data?.data)) {
     const done = raw.data.data.find(item =>
@@ -137,14 +137,12 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
       audioUrlPrivada = done.audio_url || done.source_audio_url;
     }
   }
-
-  // Si no está listo, devolvemos 200 y esperamos más callbacks
   if (!audioUrlPrivada) {
     console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
     return res.sendStatus(200);
   }
 
-  // 3) Localizamos el doc en Firestore
+  // 3) Localizar doc en Firestore
   const snap = await db.collection('musica')
     .where('taskId', '==', taskId)
     .limit(1)
@@ -156,43 +154,94 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
   const docRef = snap.docs[0].ref;
 
   try {
-    // 4) Descargamos el MP3 a un archivo temporal
-    const tmpFile = path.resolve('/tmp', `${taskId}.mp3`);
-    const downloadRes = await axios.get(audioUrlPrivada, { responseType: 'stream' });
+    // Paths temporales
+    const tmpFull = path.resolve('/tmp', `${taskId}.mp3`);
+    const tmpClip = path.resolve('/tmp', `${taskId}-clip.mp3`);
+    const tmpWater = path.resolve('/tmp', `${taskId}-watermarked.mp3`);
+    // URL de marca de agua
+    const watermarkUrl = 'https://cantalab.com/wp-content/uploads/2025/05/audioMarcaDeAgua.wav';
+
+    // 4) Descargar MP3 completo
+    const fullRes = await axios.get(audioUrlPrivada, { responseType: 'stream' });
     await new Promise((resolve, reject) => {
-      const writer = fs.createWriteStream(tmpFile);
-      downloadRes.data.pipe(writer);
-      writer.on('finish', resolve);
-      writer.on('error', reject);
+      const ws = fs.createWriteStream(tmpFull);
+      fullRes.data.pipe(ws);
+      ws.on('finish', resolve);
+      ws.on('error', reject);
     });
 
-    // 5) Subimos el MP3 a tu bucket de Firebase
-    const destino = `musica/${taskId}.mp3`;
-    await bucket.upload(tmpFile, {
-      destination: destino,
+    // 5) Subir MP3 completo a Firebase
+    const destFull = `musica/full/${taskId}.mp3`;
+    await bucket.upload(tmpFull, {
+      destination: destFull,
       metadata: { contentType: 'audio/mpeg' }
     });
+    const [fullUrl] = await bucket.file(destFull)
+      .getSignedUrl({ action: 'read', expires: Date.now() + 24*60*60*1000 });
 
-    // 6) Generamos un signed URL público (válido 24 h)
-    const [publicUrl] = await bucket
-      .file(destino)
-      .getSignedUrl({ action: 'read', expires: Date.now() + 24 * 60 * 60 * 1000 });
-
-    // 7) Actualizamos Firestore con el URL público y el nuevo estado
-    await docRef.update({
-      audioUrl: publicUrl,
-      status:   'Enviar música'
+    // 6) Crear clip de 30 s
+    await new Promise((resolve, reject) => {
+      ffmpeg(tmpFull)
+        .setStartTime(0)
+        .setDuration(30)
+        .output(tmpClip)
+        .on('end', resolve)
+        .on('error', reject)
+        .run();
     });
-    console.log(`✅ Música subida y lista en ${publicUrl} para doc ${docRef.id}`);
 
-    // 8) Limpiamos el TMP
-    fs.unlinkSync(tmpFile);
+    // 7) Descargar marca de agua local
+    const watermarkTmp = path.resolve('/tmp', 'marca.wav');
+    const wmRes = await axios.get(watermarkUrl, { responseType: 'stream' });
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(watermarkTmp);
+      wmRes.data.pipe(ws);
+      ws.on('finish', resolve);
+      ws.on('error', reject);
+    });
 
-    res.sendStatus(200);
+    // 8) Superponer marca a 1 s de clip
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(tmpClip)
+        .input(watermarkTmp)
+        .complexFilter([
+          '[1]adelay=1000|1000[beep];[0][beep]amix=inputs=2:duration=first'
+        ])
+        .outputOptions('-ac 2')
+        .output(tmpWater)
+        .on('end', resolve)
+        .on('error', reject)
+        .run();
+    });
+
+    // 9) Subir clip marcado a Firebase
+    const destClip = `musica/clip/${taskId}-clip.mp3`;
+    await bucket.upload(tmpWater, {
+      destination: destClip,
+      metadata: { contentType: 'audio/mpeg' }
+    });
+    const [clipUrl] = await bucket.file(destClip)
+      .getSignedUrl({ action: 'read', expires: Date.now() + 24*60*60*1000 });
+
+    // 10) Actualizar Firestore
+    await docRef.update({
+      fullUrl,
+      clipUrl,
+      status: 'Enviar música'
+    });
+    console.log(`✅ Música almacenada y clip listo: ${clipUrl}`);
+
+    // 11) Limpiar archivos temporales
+    [tmpFull, tmpClip, tmpWater, watermarkTmp].forEach(f => {
+      try { fs.unlinkSync(f); } catch {}
+    });
+
+    return res.sendStatus(200);
   } catch (err) {
-    console.error('❌ Error procesando callback de Suno:', err);
+    console.error('❌ Error en callback Suno:', err);
     await docRef.update({ status: 'Error música', errorMsg: err.message });
-    res.sendStatus(500);
+    return res.sendStatus(500);
   }
 });
 
