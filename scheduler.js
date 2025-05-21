@@ -427,41 +427,26 @@ async function generarMusicaConSuno() {
 /**
  * Enviar música por WhatsApp (Enviar música → Enviada)
  */
+// scheduler.js, en lugar de hacer un axios.post manual:
 async function enviarMusicaPorWhatsApp() {
   const snap = await db.collection('musica')
-    .where('status', '==', 'Enviar música')
+    .where('status','==','Enviar música')
     .limit(1)
     .get();
   if (snap.empty) return;
 
   const doc = snap.docs[0];
-  const data = doc.data();
-  const { leadId, audioUrl } = data;
-  if (!leadId || !audioUrl) {
-    console.error(`Faltan datos (leadId=${leadId}, audioUrl=${audioUrl}) para ${doc.id}`);
-    return;
-  }
+  const { leadPhone, audioUrl } = doc.data();
+  const phoneClean = (leadPhone||'').replace(/\D/g, '');
+  if (!audioUrl || !phoneClean) throw new Error(`Faltan datos para ${doc.id}`);
 
-  // Obtenemos el teléfono del lead directamente de la colección leads
-  const leadSnap = await db.collection('leads').doc(leadId).get();
-  if (!leadSnap.exists) {
-    console.error(`Lead no encontrado: ${leadId}`);
-    return;
-  }
-  const telefono = (leadSnap.data().telefono || '').replace(/\D/g, '');
-  if (!/^\d{10,15}$/.test(telefono)) {
-    console.error(`Número inválido para lead ${leadId}: "${leadSnap.data().telefono}"`);
-    return;
-  }
+  // REEMPLAZAMOS el axios.post manual por:
+  await sendAudioMessage(phoneClean, audioUrl);
 
-  // Enviamos el audio y marcamos la música como enviada
-  await sendAudioMessage(telefono, audioUrl);
-  await doc.ref.update({
-    status: 'Enviada',
-    sentAt: FieldValue.serverTimestamp()
-  });
-  console.log(`✅ Música enviada por WhatsApp al lead ${leadId} (doc ${doc.id})`);
+  await doc.ref.update({ status: 'Enviada', sentAt: FieldValue.serverTimestamp() });
+  console.log(`✅ Música enviada por WhatsApp al lead ${phoneClean} (doc ${doc.id})`);
 }
+
 
 
 
