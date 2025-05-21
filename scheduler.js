@@ -419,7 +419,11 @@ async function generarMusicaConSuno() {
   const { stylePrompt, purpose, lyrics } = doc.data();
 
   // 2) Marca como “Procesando música”
-  await docRef.update({ status: 'Procesando música' });
+  await docRef.update({ 
+    status: 'Procesando música',
+    generatedAt: FieldValue.serverTimestamp()
+  
+  });
 
   try {
     // 3) Lanza la tarea y guarda el taskId
@@ -447,41 +451,59 @@ async function generarMusicaConSuno() {
 
 
 // 4) Enviar música por WhatsApp (Enviar música → Enviada)
-/**
- * Enviar música por WhatsApp (Enviar música → Enviada)
- */
-// scheduler.js, en lugar de hacer un axios.post manual:
 async function enviarMusicaPorWhatsApp() {
-  // 1) Busca el primer doc listo para enviar
+  // 1) Buscamos todos los docs listos para enviar
   const snap = await db.collection('musica')
     .where('status', '==', 'Enviar música')
-    .limit(1)
     .get();
   if (snap.empty) return;
 
-  const doc = snap.docs[0];
-  // 2) De la colección ahora esperamos que hayas guardado:
-  //    - fullUrl   (el mp3 completo)
-  //    - clipUrl   (el mp3 de 30 s con watermark)
-  //    - leadPhone (el teléfono del lead)
-  const { leadPhone, clipUrl } = doc.data();
+  const now = Date.now();
 
-  // 3) Limpia caracteres y valídalo
-  const phoneClean = (leadPhone || '').replace(/\D/g, '');
-  if (!clipUrl || !phoneClean) {
-    throw new Error(`Faltan datos para doc ${doc.id}`);
+  for (const docSnap of snap.docs) {
+    const doc    = docSnap.data();
+    const ref    = docSnap.ref;
+    const leadId = doc.leadId;
+    const phone  = (doc.leadPhone || '').replace(/\D/g, '');
+    const lyrics = doc.lyrics;
+    const clip   = doc.clipUrl;
+    const created = doc.createdAt?.toDate?.().getTime() || now;
+
+    // 2) Sólo enviamos si han pasado ≥15 minutos desde createdAt
+    if (now - created < 15 * 60_000) continue;
+
+    if (!phone || !lyrics || !clip) {
+      console.warn(`❌ faltan datos en doc ${docSnap.id}`);
+      continue;
+    }
+
+    try {
+      // 3) Enviar la letra
+      await sendTextMessage(phone, `Aquí tienes la letra de tu canción:\n\n${lyrics}`);
+
+      // 4) Enviar el clip de 30s con marca de agua
+      await sendAudioMessage(phone, clip);
+
+      // 5) Actualizar estado en Firestore
+      await ref.update({
+        status: 'Enviada',
+        sentAt: FieldValue.serverTimestamp()
+      });
+
+      // 6) Añadir secuencia "CancionEnviada" al lead
+      await db.collection('leads').doc(leadId).update({
+        secuenciasActivas: FieldValue.arrayUnion({
+          trigger:   'CancionEnviada',
+          startTime: new Date().toISOString(),
+          index:     0
+        })
+      });
+
+      console.log(`✅ Letra + clip enviados al ${phone} y secuencia CancionEnviada agregada.`);
+    } catch (err) {
+      console.error(`❌ Error enviando música para doc ${docSnap.id}:`, err);
+    }
   }
-
-  // 4) Envía por WhatsApp **el clip** de 30 s
-  await sendAudioMessage(phoneClean, clipUrl);
-
-  // 5) Marca como enviada en Firestore
-  await doc.ref.update({
-    status: 'Enviada',
-    sentAt: FieldValue.serverTimestamp()
-  });
-
-  console.log(`✅ Clip de música enviado al lead ${phoneClean} (doc ${doc.id})`);
 }
 
 
