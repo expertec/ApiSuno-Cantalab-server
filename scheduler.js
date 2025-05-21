@@ -424,6 +424,9 @@ async function generarMusicaConSuno() {
 
 
 // 4) Enviar música por WhatsApp (Enviar música → Enviada)
+/**
+ * Enviar música por WhatsApp (Enviar música → Enviada)
+ */
 async function enviarMusicaPorWhatsApp() {
   const snap = await db.collection('musica')
     .where('status', '==', 'Enviar música')
@@ -431,18 +434,35 @@ async function enviarMusicaPorWhatsApp() {
     .get();
   if (snap.empty) return;
 
-  const docSnap = snap.docs[0];
-  const { leadPhone, audioUrl } = docSnap.data();
-  const phoneClean = (leadPhone || '').replace(/\D/g, '');
-  if (!audioUrl || !phoneClean) throw new Error(`Faltan datos para ${docSnap.id}`);
+  const doc = snap.docs[0];
+  const data = doc.data();
+  const { leadId, audioUrl } = data;
+  if (!leadId || !audioUrl) {
+    console.error(`Faltan datos (leadId=${leadId}, audioUrl=${audioUrl}) para ${doc.id}`);
+    return;
+  }
 
-  await sendAudioMessage(phoneClean, audioUrl);
-  await docSnap.ref.update({
+  // Obtenemos el teléfono del lead directamente de la colección leads
+  const leadSnap = await db.collection('leads').doc(leadId).get();
+  if (!leadSnap.exists) {
+    console.error(`Lead no encontrado: ${leadId}`);
+    return;
+  }
+  const telefono = (leadSnap.data().telefono || '').replace(/\D/g, '');
+  if (!/^\d{10,15}$/.test(telefono)) {
+    console.error(`Número inválido para lead ${leadId}: "${leadSnap.data().telefono}"`);
+    return;
+  }
+
+  // Enviamos el audio y marcamos la música como enviada
+  await sendAudioMessage(telefono, audioUrl);
+  await doc.ref.update({
     status: 'Enviada',
     sentAt: FieldValue.serverTimestamp()
   });
-  console.log(`✅ enviarMusicaPorWhatsApp: ${docSnap.id}`);
+  console.log(`✅ Música enviada por WhatsApp al lead ${leadId} (doc ${doc.id})`);
 }
+
 
 
 export {
