@@ -129,14 +129,20 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
   }
 
   // 2) Sacamos la URL del array data.data
-  let audioUrl;
-  if (Array.isArray(raw.data?.data)) {
-    // buscamos el primer elemento con audio_url no vacío
-    const completeItems = raw.data.data.filter(item => item.audio_url);
-    if (completeItems.length) {
-      audioUrl = completeItems[0].audio_url;
-    }
+
+let audioUrl;
+if (Array.isArray(raw.data?.data)) {
+  // buscamos el primer elemento con audio_url o source_audio_url no vacío
+  const completeItems = raw.data.data.filter(item =>
+    (item.audio_url && item.audio_url.trim()) ||
+    (item.source_audio_url && item.source_audio_url.trim())
+  );
+  if (completeItems.length) {
+    const first = completeItems[0];
+    audioUrl = first.audio_url || first.source_audio_url;
   }
+}
+
 
   if (!audioUrl) {
     console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
