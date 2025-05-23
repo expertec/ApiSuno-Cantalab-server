@@ -134,3 +134,21 @@ export async function sendVideoMessage(phone, media) {
       await db.collection('leads').doc(leadId).update({ lastMessageAt: msgData.timestamp });
     }
   }
+
+  /**
+ * Envía un mensaje de plantilla de WhatsApp con componentes dinámicos.
+ */
+export async function sendTemplateMessage({ to, templateName, language, components }) {
+  await callWhatsAppAPI('/messages', {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'template',
+    template: {
+      name:     templateName,
+      language: { code: language },
+      components
+    }
+  });
+
+  // (opcional) Guarda en Firestore igual que los demás mensajes…
+}

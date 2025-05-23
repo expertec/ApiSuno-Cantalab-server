@@ -1,6 +1,8 @@
 // src/server/scheduler.js
 import { db } from './firebaseAdmin.js';
-import { sendTextMessage, sendAudioMessage, sendVideoMessage} from './whatsappService.js';
+import { sendTextMessage, sendAudioMessage, sendVideoMessage, sendTemplateMessage } from './whatsappService.js';
+
+
 import admin from 'firebase-admin';
 import { Configuration, OpenAIApi } from 'openai';
 import fetch from 'node-fetch';
@@ -27,14 +29,20 @@ const openai = new OpenAIApi(configuration);
  */
 function replacePlaceholders(template, leadData) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, field) => {
-    const value = leadData[field] || '';
-    if (field === 'nombre') {
-      // devolver sólo la primera palabra del nombre completo
-      return value.split(' ')[0] || '';
+    // 1) Mapeo especial de plurales
+    if (field === 'letras' || field === 'letra') {
+      return leadData.letra || '';
     }
-    return value;
+    // 2) Nombre (solo la primera palabra)
+    if (field === 'nombre') {
+      const nombre = leadData.nombre || '';
+      return nombre.split(' ')[0] || '';
+    }
+    // 3) Teléfono u otros campos directos
+    return leadData[field] || '';
   });
 }
+
 
 /**
  * Envía un mensaje de WhatsApp según su tipo usando la Cloud API.
@@ -82,6 +90,45 @@ async function enviarMensaje(lead, mensaje) {
         break;
       }
 
+      case 'template': {
+        const phone = (lead.telefono || '').replace(/\D/g, '');
+        // sustituimos placeholders si hace falta
+        const val1 = replacePlaceholders(mensaje.variableValue, lead);
+        const val2 = replacePlaceholders(mensaje.variableValue2, lead);
+      
+        const components = [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: val1 },
+              { type: 'text', text: val2 }
+            ]
+          }
+        ];
+      
+        // 1) Envío de la plantilla
+        await sendTemplateMessage({
+          to:           phone,
+          templateName: mensaje.templateName,
+          language:     mensaje.language || 'es_MX',
+          components
+        });
+      
+        // 2) Registro en Firestore como los demás mensajes
+        await db
+          .collection('leads').doc(lead.id).collection('messages')
+          .add({
+            // puedes ajustar el content a tu gusto:
+            content: `Plantilla ${mensaje.templateName} enviada`,
+            template: mensaje.templateName,
+            variables: { nombre: val1, letra: val2 },
+            sender: 'business',
+            timestamp: new Date()
+          });
+        break;
+      }
+      
+
       default:
         console.warn(`Tipo desconocido: ${mensaje.type}`);
     }
@@ -101,7 +148,19 @@ async function processSequences() {
       .get();
 
     for (const doc of leadsSnap.docs) {
-      const lead = { id: doc.id, ...doc.data() };
+          // 1) Cargar los datos básicos del lead
+          const lead = { id: doc.id, ...doc.data() };
+      
+          // 2) Traer la letra más reciente para este lead y anexarla
+          const letraSnap = await db
+            .collection('letras')
+            .where('leadId', '==', lead.id)
+            .orderBy('letraGeneratedAt', 'desc')
+            .limit(1)
+            .get();
+          lead.letra = letraSnap.empty
+            ? ''
+            : letraSnap.docs[0].data().letra;
       if (!Array.isArray(lead.secuenciasActivas) || !lead.secuenciasActivas.length) continue;
 
       let dirty = false;
@@ -333,9 +392,12 @@ async function generarPromptParaMusica() {
 
   // 2) Borrador del prompt
   const draft = `
-Crea un prompt para Suno que genere una canción estilo éxitos de ${artist}, género ${genre}, voz ${voiceType}.
-Sin mencionar al artista; céntrate en ritmo, instrumentos y atmósfera. Máximo 120 caracteres,
-elementos separados por comas.
+  Crea un promt para decirle a suno que haga una canción estilo exitos de  ${artist} genero 
+   ${genre} con tipo de voz ${voiceType}. Sin mencionar al artista en cuestion u otras palabras
+    que puedan causar conflictos de derecho de autor, centrate en los elementos musicales como ritmo, instrumentos,
+     generos. Suno requiere que sean maximo 120 caracteres y que le pases los elementos separados por coma, 
+     mira este ejemplo ( rock pop con influencias en blues, guitarra electrica, ritmo de bateria energico)
+      genera algo similar para cancion que quiero.
   `.trim();
 
   // 3) Usa ChatGPT para refinar el borrador
