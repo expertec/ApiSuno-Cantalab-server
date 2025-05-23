@@ -34,16 +34,11 @@ const openai = new OpenAIApi(configuration);
  * Reemplaza placeholders en plantillas de texto.
  * {{campo}} se sustituye por leadData.campo si existe.
  */
-function replacePlaceholders(template, leadData) {
+function replacePlaceholders(template, lead) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, field) => {
-    if (field === 'letra') {
-      return leadData.letra || '';
-    }
-    if (field === 'nombre') {
-      const nombre = leadData.nombre || '';
-      return nombre.split(' ')[0] || '';
-    }
-    return leadData[field] || '';
+    if (field === 'letra') return lead.letra || '';
+    if (field === 'nombre') return (lead.nombre || '').split(' ')[0] || '';
+    return lead[field] || '';
   });
 }
 
@@ -53,29 +48,27 @@ function replacePlaceholders(template, leadData) {
  */
 export async function enviarMensaje(lead, mensaje) {
   try {
-    // 1) Normalizar teléfono
     const phone = (lead.telefono || '').replace(/\D/g, '');
 
-    // 2) Si en el contenido o parámetros hay {{letra}}, cargar la letra más reciente
-    const textoCompleto = mensaje.contenido || '';
-    const usaLetra =
-      textoCompleto.includes('{{letra}}') ||
-      mensaje.parameters?.some(p => p.value.includes('{{letra}}'));
+    // — 1) Precarga de letra si plantilla la usa
+    const usaLetra = mensaje.parameters?.some(p => p.value.includes('{{letra}}'));
     if (usaLetra) {
-      // Asegurarse de tener lead.letraIds (debe venir del proceso que carga leads)
+      // asegúrate de haber añadido lead.letraIds al cargar el lead
       if (Array.isArray(lead.letraIds) && lead.letraIds.length > 0) {
-        const latestId = lead.letraIds[0];
-        const doc = await db.collection('letras').doc(latestId).get();
-        lead.letra = doc.exists ? (doc.data().letra || '') : '';
+        const letraDoc = await db
+          .collection('letras')
+          .doc(lead.letraIds[0])
+          .get();
+        lead.letra = letraDoc.exists ? letraDoc.data().letra : '';
       } else {
+        console.warn(`Lead ${lead.id} no tiene letraIds`);
         lead.letra = '';
       }
     }
 
-    // 3) Función de ayuda para reemplazar y sanitizar
-    const fill = text => sanitizeParam(replacePlaceholders(text, lead));
+    // Helper para reemplazar y sanear
+    const fill = txt => sanitize(replacePlaceholders(txt, lead));
 
-    // 4) Switch según tipo
     switch (mensaje.type) {
       case 'texto': {
         const content = fill(mensaje.contenido || '');
@@ -84,75 +77,86 @@ export async function enviarMensaje(lead, mensaje) {
       }
 
       case 'formulario': {
-        // reutilizamos replacePlaceholders para nombre y teléfono
-        const content = fill(mensaje.contenido || '')
-          .replace(/\{\{telefono\}\}/g, phone);
-        if (content) await sendTextMessage(phone, content);
+        // en formulario sólo nombre y teléfono
+        let text = mensaje.contenido || '';
+        text = text
+          .replace('{{telefono}}', phone)
+          .replace('{{nombre}}', encodeURIComponent(lead.nombre || ''))
+          .replace(/\r?\n/g, ' ')
+          .trim();
+        if (text) await sendTextMessage(phone, text);
         break;
       }
 
       case 'audio': {
-        const mediaUrl = fill(mensaje.contenido || '');
-        await sendAudioMessage(phone, mediaUrl);
+        const url = fill(mensaje.contenido || '');
+        await sendAudioMessage(phone, url);
         break;
       }
 
       case 'imagen': {
-        const mediaUrl = fill(mensaje.contenido || '');
-        await sendTextMessage(phone, mediaUrl);
+        const url = fill(mensaje.contenido || '');
+        await sendTextMessage(phone, url);
         break;
       }
 
       case 'video': {
-        const mediaUrl = fill(mensaje.contenido || '');
-        await sendVideoMessage(phone, mediaUrl);
+        const url = fill(mensaje.contenido || '');
+        await sendVideoMessage(phone, url);
         break;
       }
 
       case 'template': {
-        // Construir parámetros de plantilla
+        // monta los parámetros
         const params = (mensaje.parameters || []).map(p => ({
           type: 'text',
           text: fill(p.value)
         }));
+
         const components = params.length
           ? [{ type: 'body', parameters: params }]
           : [];
 
-        // Enviar
-        await sendTemplateMessage({
-          to:           phone,
+        // log para verificar antes de enviar
+        console.log('TEMPLATE PAYLOAD:', {
+          to: phone,
           templateName: mensaje.templateName,
-          language:     mensaje.language || 'es_MX',
+          language: mensaje.language || 'es_MX',
           components
         });
 
-        // Registrar en Firestore
+        await sendTemplateMessage({
+          to: phone,
+          templateName: mensaje.templateName,
+          language: mensaje.language || 'es_MX',
+          components
+        });
+
+        // registro en Firestore
         await db
           .collection('leads')
           .doc(lead.id)
           .collection('messages')
           .add({
-            content:   `Plantilla ${mensaje.templateName} enviada`,
-            template:  mensaje.templateName,
+            content: `Plantilla ${mensaje.templateName} enviada`,
+            template: mensaje.templateName,
             variables: (mensaje.parameters || []).reduce((obj, p) => {
-              obj[p.key] = replacePlaceholders(p.value, lead);
+              obj[p.key] = fill(p.value);
               return obj;
             }, {}),
-            sender:    'business',
+            sender: 'business',
             timestamp: new Date()
           });
         break;
       }
 
       default:
-        console.warn(`Tipo desconocido en enviarMensaje(): ${mensaje.type}`);
+        console.warn(`Tipo desconocido en enviarMensaje: ${mensaje.type}`);
     }
   } catch (err) {
-    console.error("Error en enviarMensaje:", err);
+    console.error('Error en enviarMensaje:', err);
   }
 }
-
 
 /**
  * Procesa las secuencias activas de cada lead.
@@ -224,10 +228,14 @@ async function processSequences() {
 async function generateLetras() {
   console.log("▶️ generateLetras: inicio");
   try {
-    const snap = await db.collection('letras').where('status', '==', 'Sin letra').get();
+    const snap = await db.collection('letras')
+      .where('status', '==', 'Sin letra')
+      .get();
     console.log(`✔️ generateLetras: encontrados ${snap.size} registros con status 'Sin letra'`);
+    
     for (const docSnap of snap.docs) {
       const data = docSnap.data();
+      const leadId = data.leadId;
       const prompt = `Escribe una letra de canción con lenguaje simple que su estructura sea verso 1, verso 2, coro, verso 3, verso 4 y coro. Agrega titulo de la canción en negritas. No pongas datos personales que no se puedan confirmar. Agrega un coro cantable y memorable. Solo responde con la letra de la canción sin texto adicional. Propósito: ${data.purpose}. Nombre: ${data.includeName}. Anecdotas o fraces: ${data.anecdotes}`;
       console.log(`📝 prompt para ${docSnap.id}:\n${prompt}`);
 
@@ -240,20 +248,32 @@ async function generateLetras() {
       });
 
       const letra = response.data.choices?.[0]?.message?.content?.trim();
-      if (letra) {
-        console.log(`✅ letra generada para ${docSnap.id}`);
-        await docSnap.ref.update({
-          letra,
-          status: 'enviarLetra',
-          letraGeneratedAt: FieldValue.serverTimestamp()
-        });
-      }
+      if (!letra) continue;
+
+      console.log(`✅ letra generada para ${docSnap.id}`);
+      // 1) Actualiza el doc en 'letras'
+      await docSnap.ref.update({
+        letra,
+        status: 'enviarLetra',
+        letraGeneratedAt: FieldValue.serverTimestamp()
+      });
+
+      // 2) Guarda la letra en el lead:
+      //    - actualiza un campo `letra` con el texto
+      //    - añade el ID de esta letra en un array `letraIds`
+      const leadRef = db.collection('leads').doc(leadId);
+      await leadRef.update({
+        letra,                                          // campo rápido para el acceso
+        letraIds: FieldValue.arrayUnion(docSnap.id)     // histórico de IDs
+      });
     }
+
     console.log("▶️ generateLetras: finalizado");
   } catch (err) {
     console.error("❌ Error generateLetras:", err);
   }
 }
+
 
 /**
  * Envía por WhatsApp las letras generadas (status 'enviarLetra'),
