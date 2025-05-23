@@ -9,6 +9,13 @@ import fetch from 'node-fetch';
 import axios from 'axios';
 const bucket = admin.storage().bucket();
 
+function sanitizeParam(text) {
+  return text
+    .replace(/[\r\n\t]+/g, ' ')  // convierte saltos de línea y tabs en espacios
+    .replace(/ {2,}/g, ' ')      // colapsa múltiples espacios
+    .trim();
+}
+
 
 
 const { FieldValue } = admin.firestore;
@@ -94,13 +101,17 @@ async function enviarMensaje(lead, mensaje) {
         const phone = (lead.telefono||'').replace(/\D/g,'');
         // mensaje.parameters es un array [{key, value}, …]
         const params = (mensaje.parameters || []).map(p => ({
-          type: 'text',
-          text: replacePlaceholders(p.value, lead)
-        }));
-      
-        const components = [
-          { type: 'body', parameters: params }
-        ];
+                type: 'text',
+                // primero rellena placeholders, luego sanea el string
+                text: sanitizeParam(
+                  replacePlaceholders(p.value, lead)
+                )
+              }));
+
+       
+          const components = params.length
+      ? [{ type: 'body', parameters: params }]
+      : [];
       
         await sendTemplateMessage({
           to:           phone,
