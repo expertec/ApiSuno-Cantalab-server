@@ -138,17 +138,21 @@ export async function sendVideoMessage(phone, media) {
   /**
  * Envía un mensaje de plantilla de WhatsApp con componentes dinámicos.
  */
-export async function sendTemplateMessage({ to, templateName, language, components }) {
-  await callWhatsAppAPI('/messages', {
-    messaging_product: 'whatsapp',
-    to,
-    type: 'template',
-    template: {
-      name:     templateName,
-      language: { code: language },
-      components
-    }
-  });
-
-  // (opcional) Guarda en Firestore igual que los demás mensajes…
-}
+  export async function sendTemplateMessage({ to, templateName, language, components }) {
+    // Construimos el payload mínimo
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: language },
+        // sólo incluimos components si hay al menos un parámetro
+        ...(components && components.length > 0
+           ? { components }
+           : {})
+      }
+    };
+    await callWhatsAppAPI('/messages', payload);
+  }
+  

@@ -91,22 +91,17 @@ async function enviarMensaje(lead, mensaje) {
       }
 
       case 'template': {
-        const phone = (lead.telefono || '').replace(/\D/g, '');
-        // sustituimos placeholders si hace falta
-        const val1 = replacePlaceholders(mensaje.variableValue, lead);
-        const val2 = replacePlaceholders(mensaje.variableValue2, lead);
+        const phone = (lead.telefono||'').replace(/\D/g,'');
+        // mensaje.parameters es un array [{key, value}, …]
+        const params = (mensaje.parameters || []).map(p => ({
+          type: 'text',
+          text: replacePlaceholders(p.value, lead)
+        }));
       
         const components = [
-          {
-            type: 'body',
-            parameters: [
-              { type: 'text', text: val1 },
-              { type: 'text', text: val2 }
-            ]
-          }
+          { type: 'body', parameters: params }
         ];
       
-        // 1) Envío de la plantilla
         await sendTemplateMessage({
           to:           phone,
           templateName: mensaje.templateName,
@@ -114,19 +109,22 @@ async function enviarMensaje(lead, mensaje) {
           components
         });
       
-        // 2) Registro en Firestore como los demás mensajes
+        // Guardar en Firestore
         await db
           .collection('leads').doc(lead.id).collection('messages')
           .add({
-            // puedes ajustar el content a tu gusto:
-            content: `Plantilla ${mensaje.templateName} enviada`,
-            template: mensaje.templateName,
-            variables: { nombre: val1, letra: val2 },
-            sender: 'business',
-            timestamp: new Date()
+            content:    `Plantilla ${mensaje.templateName} enviada`,
+            template:   mensaje.templateName,
+            variables:  mensaje.parameters.reduce((o, p) => {
+                         o[p.key] = replacePlaceholders(p.value, lead);
+                         return o;
+                       }, {}),
+            sender:     'business',
+            timestamp:  new Date()
           });
         break;
       }
+      
       
 
       default:
