@@ -11,8 +11,8 @@ const bucket = admin.storage().bucket();
 
 function sanitizeParam(text) {
   return text
-    .replace(/[\r\n\t]+/g, ' ')  // convierte saltos de línea y tabs en espacios
-    .replace(/ {2,}/g, ' ')      // colapsa múltiples espacios
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
     .trim();
 }
 
@@ -36,16 +36,13 @@ const openai = new OpenAIApi(configuration);
  */
 function replacePlaceholders(template, leadData) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, field) => {
-    // 1) Mapeo especial de plurales
-    if (field === 'letras' || field === 'letra') {
+    if (field === 'letra') {
       return leadData.letra || '';
     }
-    // 2) Nombre (solo la primera palabra)
     if (field === 'nombre') {
       const nombre = leadData.nombre || '';
       return nombre.split(' ')[0] || '';
     }
-    // 3) Teléfono u otros campos directos
     return leadData[field] || '';
   });
 }
@@ -54,97 +51,108 @@ function replacePlaceholders(template, leadData) {
 /**
  * Envía un mensaje de WhatsApp según su tipo usando la Cloud API.
  */
-async function enviarMensaje(lead, mensaje) {
+export async function enviarMensaje(lead, mensaje) {
   try {
+    // 1) Normalizar teléfono
     const phone = (lead.telefono || '').replace(/\D/g, '');
-    const content = replacePlaceholders(mensaje.contenido || '', lead).trim();
 
+    // 2) Si en el contenido o parámetros hay {{letra}}, cargar la letra más reciente
+    const textoCompleto = mensaje.contenido || '';
+    const usaLetra =
+      textoCompleto.includes('{{letra}}') ||
+      mensaje.parameters?.some(p => p.value.includes('{{letra}}'));
+    if (usaLetra) {
+      // Asegurarse de tener lead.letraIds (debe venir del proceso que carga leads)
+      if (Array.isArray(lead.letraIds) && lead.letraIds.length > 0) {
+        const latestId = lead.letraIds[0];
+        const doc = await db.collection('letras').doc(latestId).get();
+        lead.letra = doc.exists ? (doc.data().letra || '') : '';
+      } else {
+        lead.letra = '';
+      }
+    }
+
+    // 3) Función de ayuda para reemplazar y sanitizar
+    const fill = text => sanitizeParam(replacePlaceholders(text, lead));
+
+    // 4) Switch según tipo
     switch (mensaje.type) {
-      case 'texto':
+      case 'texto': {
+        const content = fill(mensaje.contenido || '');
         if (content) await sendTextMessage(phone, content);
         break;
+      }
 
       case 'formulario': {
-        const rawTemplate = mensaje.contenido || '';
-        const nameVal = encodeURIComponent(lead.nombre || '');
-        const text = rawTemplate
-          .replace('{{telefono}}', phone)
-          .replace('{{nombre}}', nameVal)
-          .replace(/\r?\n/g, ' ')
-          .trim();
-        if (text) await sendTextMessage(phone, text);
+        // reutilizamos replacePlaceholders para nombre y teléfono
+        const content = fill(mensaje.contenido || '')
+          .replace(/\{\{telefono\}\}/g, phone);
+        if (content) await sendTextMessage(phone, content);
         break;
       }
 
       case 'audio': {
-        
-        const mediaUrl = replacePlaceholders(mensaje.contenido, lead);
+        const mediaUrl = fill(mensaje.contenido || '');
         await sendAudioMessage(phone, mediaUrl);
         break;
       }
 
       case 'imagen': {
-        const mediaUrl = replacePlaceholders(mensaje.contenido, lead);
-        // Por simplicidad, enviamos el enlace como texto
+        const mediaUrl = fill(mensaje.contenido || '');
         await sendTextMessage(phone, mediaUrl);
         break;
       }
 
       case 'video': {
-        const mediaUrl = replacePlaceholders(mensaje.contenido, lead);
-           // Enviar el vídeo usando la API nativa de vídeo
-           await sendVideoMessage(phone, mediaUrl);
+        const mediaUrl = fill(mensaje.contenido || '');
+        await sendVideoMessage(phone, mediaUrl);
         break;
       }
 
       case 'template': {
-        const phone = (lead.telefono||'').replace(/\D/g,'');
-        // mensaje.parameters es un array [{key, value}, …]
+        // Construir parámetros de plantilla
         const params = (mensaje.parameters || []).map(p => ({
-                type: 'text',
-                // primero rellena placeholders, luego sanea el string
-                text: sanitizeParam(
-                  replacePlaceholders(p.value, lead)
-                )
-              }));
+          type: 'text',
+          text: fill(p.value)
+        }));
+        const components = params.length
+          ? [{ type: 'body', parameters: params }]
+          : [];
 
-       
-          const components = params.length
-      ? [{ type: 'body', parameters: params }]
-      : [];
-      
+        // Enviar
         await sendTemplateMessage({
           to:           phone,
           templateName: mensaje.templateName,
           language:     mensaje.language || 'es_MX',
           components
         });
-      
-        // Guardar en Firestore
+
+        // Registrar en Firestore
         await db
-          .collection('leads').doc(lead.id).collection('messages')
+          .collection('leads')
+          .doc(lead.id)
+          .collection('messages')
           .add({
-            content:    `Plantilla ${mensaje.templateName} enviada`,
-            template:   mensaje.templateName,
-            variables:  mensaje.parameters.reduce((o, p) => {
-                         o[p.key] = replacePlaceholders(p.value, lead);
-                         return o;
-                       }, {}),
-            sender:     'business',
-            timestamp:  new Date()
+            content:   `Plantilla ${mensaje.templateName} enviada`,
+            template:  mensaje.templateName,
+            variables: (mensaje.parameters || []).reduce((obj, p) => {
+              obj[p.key] = replacePlaceholders(p.value, lead);
+              return obj;
+            }, {}),
+            sender:    'business',
+            timestamp: new Date()
           });
         break;
       }
-      
-      
 
       default:
-        console.warn(`Tipo desconocido: ${mensaje.type}`);
+        console.warn(`Tipo desconocido en enviarMensaje(): ${mensaje.type}`);
     }
   } catch (err) {
-    console.error("Error al enviar mensaje:", err);
+    console.error("Error en enviarMensaje:", err);
   }
 }
+
 
 /**
  * Procesa las secuencias activas de cada lead.
@@ -160,16 +168,7 @@ async function processSequences() {
           // 1) Cargar los datos básicos del lead
           const lead = { id: doc.id, ...doc.data() };
       
-          // 2) Traer la letra más reciente para este lead y anexarla
-          const letraSnap = await db
-            .collection('letras')
-            .where('leadId', '==', lead.id)
-            .orderBy('letraGeneratedAt', 'desc')
-            .limit(1)
-            .get();
-          lead.letra = letraSnap.empty
-            ? ''
-            : letraSnap.docs[0].data().letra;
+       
       if (!Array.isArray(lead.secuenciasActivas) || !lead.secuenciasActivas.length) continue;
 
       let dirty = false;
