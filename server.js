@@ -14,6 +14,10 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { admin, db } from './firebaseAdmin.js';
 
+import os from 'os';
+
+
+
 import { sendTextMessage, sendAudioMessage } from './whatsappService.js';
 import {
   processSequences,
