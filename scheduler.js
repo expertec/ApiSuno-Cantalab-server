@@ -7,6 +7,14 @@ import admin from 'firebase-admin';
 import { Configuration, OpenAIApi } from 'openai';
 import fetch from 'node-fetch';
 import axios from 'axios';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import ffmpeg from 'fluent-ffmpeg';
+
+
+
+
 const bucket = admin.storage().bucket();
 
 // Sanitize helper correctamente nombrado
@@ -16,6 +24,17 @@ function sanitizeParam(text) {
     .replace(/ {2,}/g, ' ')
     .trim();
 }
+
+async function downloadStream(url, destPath) {
+  const res = await axios.get(url, { responseType: 'stream' });
+  await new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(destPath);
+    res.data.pipe(ws);
+    ws.on('finish', resolve);
+    ws.on('error', reject);
+  });
+}
+
 
 /**
  * Trunca un texto para que su longitud, contando saltos de línea,
@@ -566,6 +585,110 @@ async function generarMusicaConSuno() {
 }
 
 
+async function procesarClips() {
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Audio listo')
+    .get();
+  if (snap.empty) return;
+
+  for (const docSnap of snap.docs) {
+    const ref    = docSnap.ref;
+    const { fullUrl } = docSnap.data();
+    const id     = docSnap.id;
+
+    if (!fullUrl) {
+      console.error(`[${id}] falta fullUrl`);
+      continue;
+    }
+
+    // Marcamos que estamos procesando el clip
+    await ref.update({ status: 'Generando clip' });
+
+    // Rutas absolutas
+    const tmpFull      = path.join(os.tmpdir(), `${id}-full.mp3`);
+    const tmpClip      = path.join(os.tmpdir(), `${id}-clip.mp3`);
+    const watermarkUrl = 'https://cantalab.com/wp-content/uploads/2025/05/marca-de-agua-1-minuto.mp3';
+    const watermarkTmp  = path.join(os.tmpdir(), 'watermark.mp3');
+    const tmpWater     = path.join(os.tmpdir(), `${id}-watermarked.mp3`);
+
+    // 1) Descargar audio completo
+    await downloadStream(fullUrl, tmpFull);
+    if (!fs.existsSync(tmpFull)) {
+      console.error(`[${id}] descarga full fallida`);
+      await ref.update({ status: 'Error descarga full' });
+      continue;
+    }
+
+    // 2) Generar clip de 60s
+    try {
+      await new Promise((res, rej) => {
+        ffmpeg(tmpFull)
+          .setStartTime(0)
+          .setDuration(60)
+          .output(tmpClip)
+          .on('end', res)
+          .on('error', rej)
+          .run();
+      });
+    } catch (err) {
+      console.error(`[${id}] error generando clip:`, err);
+      await ref.update({ status: 'Error clip' });
+      continue;
+    }
+
+    // 3) Descargar marca y superponer al clip
+    await downloadStream(watermarkUrl, watermarkTmp);
+    if (!fs.existsSync(watermarkTmp)) {
+      console.error(`[${id}] descarga watermark fallida`);
+      await ref.update({ status: 'Error watermark descarga' });
+      continue;
+    }
+    try {
+      await new Promise((res, rej) => {
+        ffmpeg()
+          .input(tmpClip)
+          .input(watermarkTmp)
+          .complexFilter([
+            '[1]adelay=1000|1000,volume=0.3[beep];' +
+            '[0][beep]amix=inputs=2:duration=first'
+          ])
+          .output(tmpWater)
+          .on('end', res)
+          .on('error', rej)
+          .run();
+      });
+    } catch (err) {
+      console.error(`[${id}] error aplicando watermark:`, err);
+      await ref.update({ status: 'Error watermark' });
+      continue;
+    }
+
+    // 4) Subir clip final y actualizar Firestore
+    try {
+      const [file] = await bucket.upload(tmpWater, {
+        destination: `musica/clip/${id}-clip.mp3`,
+        metadata:    { contentType: 'audio/mpeg' }
+      });
+      const clipUrl = `https://storage.googleapis.com/${file.bucket}/${file.name}`;
+      await ref.update({
+        clipUrl,
+        status: 'Enviar música'
+      });
+      console.log(`[${id}] clip listo → Enviar música`);
+    } catch (err) {
+      console.error(`[${id}] error subiendo clip:`, err);
+      await ref.update({ status: 'Error upload clip' });
+    }
+
+    // Limpieza
+    [tmpFull, tmpClip, watermarkTmp, tmpWater].forEach(f => {
+      try { fs.unlinkSync(f); } catch {}
+    });
+  }
+}
+
+
+
 // 4) Enviar música por WhatsApp (Enviar música → Enviada)
 async function enviarMusicaPorWhatsApp() {
   // 1) Buscamos todos los docs listos para enviar
@@ -646,5 +769,6 @@ export {
   generarLetraParaMusica,
   generarPromptParaMusica,
   generarMusicaConSuno,
+  procesarClips, 
   enviarMusicaPorWhatsApp
 };

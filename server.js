@@ -22,6 +22,7 @@ import {
   generarLetraParaMusica,
   generarPromptParaMusica,
   generarMusicaConSuno,
+  procesarClips,
   enviarMusicaPorWhatsApp
 } from './scheduler.js';
 
@@ -115,137 +116,55 @@ app.post(
   }
 );
 
-
 app.post('/api/suno/callback', express.json(), async (req, res) => {
-  const raw = req.body;
-  console.log('🔔 Callback de Suno raw:', JSON.stringify(raw, null, 2));
-
-  // 1) Extraer taskId
+  const raw    = req.body;
   const taskId = raw.taskId || raw.data?.taskId || raw.data?.task_id;
-  if (!taskId) {
-    console.warn('⚠️ Callback sin taskId:', raw);
-    return res.sendStatus(400);
-  }
+  if (!taskId) return res.sendStatus(400);
 
-  // 2) Extraer URL privada de audio (esperar solo 'complete')
-  let audioUrlPrivada = null;
-  if (Array.isArray(raw.data?.data)) {
-    const done = raw.data.data.find(item =>
-      (item.audio_url || item.source_audio_url)?.trim()
-    );
-    if (done) {
-      audioUrlPrivada = done.audio_url || done.source_audio_url;
-    }
-  }
-  if (!audioUrlPrivada) {
-    console.log(`⚠️ Callback intermedio (no audio) para task ${taskId}`);
-    return res.sendStatus(200);
-  }
+  const item = Array.isArray(raw.data?.data)
+    ? raw.data.data.find(i => i.audio_url || i.source_audio_url)
+    : null;
+  const audioUrlPrivada = item?.audio_url || item?.source_audio_url;
+  if (!audioUrlPrivada) return res.sendStatus(200);
 
-  // 3) Localizar doc en Firestore
   const snap = await db.collection('musica')
     .where('taskId', '==', taskId)
     .limit(1)
     .get();
-  if (snap.empty) {
-    console.warn('⚠️ Callback Suno sin task encontrado:', taskId);
-    return res.sendStatus(404);
-  }
+  if (snap.empty) return res.sendStatus(404);
   const docRef = snap.docs[0].ref;
 
   try {
-    // Paths temporales
-    const tmpFull = path.resolve('/tmp', `${taskId}.mp3`);
-    const tmpClip = path.resolve('/tmp', `${taskId}-clip.mp3`);
-    const tmpWater = path.resolve('/tmp', `${taskId}-watermarked.mp3`);
-    // URL de marca de agua
-    const watermarkUrl = 'https://cantalab.com/wp-content/uploads/2025/05/marca-de-agua-1-minuto.mp3';
-
-    // 4) Descargar MP3 completo
-    const fullRes = await axios.get(audioUrlPrivada, { responseType: 'stream' });
-    await new Promise((resolve, reject) => {
+    // Descargar y subir solo el MP3 completo
+    const tmpFull = path.join(os.tmpdir(), `${taskId}-full.mp3`);
+    const r = await axios.get(audioUrlPrivada, { responseType: 'stream' });
+    await new Promise((ok, ko) => {
       const ws = fs.createWriteStream(tmpFull);
-      fullRes.data.pipe(ws);
-      ws.on('finish', resolve);
-      ws.on('error', reject);
+      r.data.pipe(ws);
+      ws.on('finish', ok);
+      ws.on('error', ko);
     });
 
-    // 5) Subir MP3 completo a Firebase
-    const destFull = `musica/full/${taskId}.mp3`;
-    await bucket.upload(tmpFull, {
-      destination: destFull,
-      metadata: { contentType: 'audio/mpeg' }
-    });
-    const [fullUrl] = await bucket.file(destFull)
-      .getSignedUrl({ action: 'read', expires: Date.now() + 24*60*60*1000 });
+    const dest = `musica/full/${taskId}.mp3`;
+    await bucket.upload(tmpFull, { destination: dest, metadata: { contentType: 'audio/mpeg' } });
+    const [fullUrl] = await bucket.file(dest)
+      .getSignedUrl({ action: 'read', expires: Date.now() + 86400_000 });
 
-    // 6) Crear clip de 30 s
-    await new Promise((resolve, reject) => {
-      ffmpeg(tmpFull)
-        .setStartTime(0)
-        .setDuration(60)
-        .output(tmpClip)
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    });
-
-    // 7) Descargar marca de agua local
-    const watermarkTmp = path.resolve('/tmp', 'marca.wav');
-    const wmRes = await axios.get(watermarkUrl, { responseType: 'stream' });
-    await new Promise((resolve, reject) => {
-      const ws = fs.createWriteStream(watermarkTmp);
-      wmRes.data.pipe(ws);
-      ws.on('finish', resolve);
-      ws.on('error', reject);
-    });
-
-    // 8) Superponer marca a 1 s de clip
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(tmpClip)
-        .input(watermarkTmp)
-        .complexFilter([
-          // 1) Retardar la marca 1 s → 2) Bajar volumen al 0.3 → 3) Mezclar
-          '[1]adelay=1000|1000,volume=0.75[beep];' +
-          '[0][beep]amix=inputs=2:duration=first'
-        ])
-        .outputOptions('-ac 2')
-        .output(tmpWater)
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    });
-
-    // 9) Subir clip marcado a Firebase
-    const destClip = `musica/clip/${taskId}-clip.mp3`;
-    await bucket.upload(tmpWater, {
-      destination: destClip,
-      metadata: { contentType: 'audio/mpeg' }
-    });
-    const [clipUrl] = await bucket.file(destClip)
-      .getSignedUrl({ action: 'read', expires: Date.now() + 24*60*60*1000 });
-
-    // 10) Actualizar Firestore
+    // Marca el doc para que procesarClips() lo recoja
     await docRef.update({
       fullUrl,
-      clipUrl,
-      status: 'Enviar música'
+      status: 'Audio listo',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
-    console.log(`✅ Música almacenada y clip listo: ${clipUrl}`);
-
-    // 11) Limpiar archivos temporales
-    [tmpFull, tmpClip, tmpWater, watermarkTmp].forEach(f => {
-      try { fs.unlinkSync(f); } catch {}
-    });
-
+    fs.unlink(tmpFull, () => {});
     return res.sendStatus(200);
   } catch (err) {
-    console.error('❌ Error en callback Suno:', err);
+    console.error('❌ callback Suno error:', err);
     await docRef.update({ status: 'Error música', errorMsg: err.message });
     return res.sendStatus(500);
   }
 });
+
 
 
 
@@ -522,20 +441,20 @@ cron.schedule('* * * * *', () => {
 });
 
 // NUEVOS cron jobs para música
-cron.schedule('* * * * *', () => {
-  generarLetraParaMusica().catch(err => console.error('Error en generarLetraParaMusica:', err));
-});
-cron.schedule('* * * * *', () => {
-  generarPromptParaMusica().catch(err => console.error('Error en generarPromptParaMusica:', err));
-});
+// Generar letra → Sin prompt
+cron.schedule('*/1 * * * *', generarLetraParaMusica);
 
-cron.schedule('* * * * *', () => {
-  generarMusicaConSuno().catch(console.error);
-});
+// Refinar prompt → Sin música
+cron.schedule('*/1 * * * *', generarPromptParaMusica);
 
-cron.schedule('* * * * *', () => {
-  enviarMusicaPorWhatsApp().catch(err => console.error('Error en enviarMusicaPorWhatsApp:', err));
-});
+// Lanzar Suno → Procesando música
+cron.schedule('*/2 * * * *', generarMusicaConSuno);
+
+// Procesar clips → Enviar música
+cron.schedule('*/2 * * * *', procesarClips);
+
+// Enviar por WhatsApp → Enviada
+cron.schedule('*/1 * * * *', enviarMusicaPorWhatsApp);
 
 // Debe ir antes de app.listen(...)
 app.get('/api/media', async (req, res) => {
