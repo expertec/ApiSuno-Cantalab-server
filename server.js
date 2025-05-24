@@ -23,6 +23,7 @@ import {
   generarPromptParaMusica,
   generarMusicaConSuno,
   procesarClips,
+  retryStuckMusic,
   enviarMusicaPorWhatsApp
 } from './scheduler.js';
 
@@ -455,6 +456,10 @@ cron.schedule('*/2 * * * *', procesarClips);
 
 // Enviar por WhatsApp → Enviada
 cron.schedule('*/1 * * * *', enviarMusicaPorWhatsApp);
+
+// Cada 5 minutos, resetea las tareas que llevan >10 min atascadas en 'Procesando música'
+cron.schedule('*/5 * * * *', () => retryStuckMusic(10));
+
 
 // Debe ir antes de app.listen(...)
 app.get('/api/media', async (req, res) => {

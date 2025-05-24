@@ -35,6 +35,34 @@ async function downloadStream(url, destPath) {
   });
 }
 
+/**
+ * Detecta y resetea tareas atascadas en 'Procesando música' por más de {thresholdMin} minutos
+ */
+async function retryStuckMusic(thresholdMin = 10) {
+  const cutoff = Date.now() - thresholdMin * 60_000;
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Procesando música')
+    .where('generatedAt', '<=', new Date(cutoff))
+    .get();
+  if (snap.empty) return;
+
+  console.log(`🔄 retryStuckMusic: reenviando ${snap.size} tareas atascadas`);
+  for (const docSnap of snap.docs) {
+    try {
+      await docSnap.ref.update({
+        status:    'Sin música',
+        taskId:    admin.firestore.FieldValue.delete(),
+        errorMsg:  admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      console.log(`  ✅ ${docSnap.id} → status 'Sin música'`);
+    } catch (err) {
+      console.error(`  ❌ no pude resetear ${docSnap.id}:`, err);
+    }
+  }
+}
+
+
 
 /**
  * Trunca un texto para que su longitud, contando saltos de línea,
@@ -770,5 +798,6 @@ export {
   generarPromptParaMusica,
   generarMusicaConSuno,
   procesarClips, 
+  retryStuckMusic,
   enviarMusicaPorWhatsApp
 };
