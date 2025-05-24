@@ -222,7 +222,15 @@ async function generateLetras() {
     for (const docSnap of snap.docs) {
       const data = docSnap.data();
       const leadId = data.leadId;
-      const prompt = `Escribe una letra de canción con lenguaje simple que su estructura sea verso 1, verso 2, coro, verso 3, verso 4 y coro. Agrega titulo de la canción en negritas. No pongas datos personales que no se puedan confirmar. Agrega un coro cantable y memorable. Solo responde con la letra de la canción sin texto adicional. Propósito: ${data.purpose}. Nombre: ${data.includeName}. Anecdotas o fraces: ${data.anecdotes}`;
+      const MAX = 750;
+const prompt = `
+Escribe una letra de canción con lenguaje simple, siguiendo esta estructura:
+verso 1, verso 2, coro, verso 3, verso 4 y coro. Agrega el título en negritas.
+**La letra no debe exceder ${MAX} caracteres.** No incluyas texto adicional ni explicaciones.
+Propósito: ${data.purpose}.
+Nombre: ${data.includeName}.
+Anécdotas o frases: ${data.anecdotes}.
+`.trim();
       console.log(`📝 prompt para ${docSnap.id}:\n${prompt}`);
 
       const response = await openai.createChatCompletion({
