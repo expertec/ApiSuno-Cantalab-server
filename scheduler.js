@@ -145,7 +145,7 @@ export async function enviarMensaje(lead, mensaje) {
 /**
  * Genera letras, las guarda en colección 'letras' y en el propio Lead.
  */
-export async function generateLetras() {
+async function generateLetras() {
   console.log("▶️ generateLetras: inicio");
   const snap = await db.collection('letras')
     .where('status', '==', 'Sin letra')
