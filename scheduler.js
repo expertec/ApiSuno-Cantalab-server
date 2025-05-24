@@ -691,22 +691,32 @@ async function procesarClips() {
       continue;
     }
 
-    // 4) Subir clip final y actualizar Firestore
-    try {
-      const [file] = await bucket.upload(tmpWater, {
-        destination: `musica/clip/${id}-clip.mp3`,
-        metadata:    { contentType: 'audio/mpeg' }
-      });
-      const clipUrl = `https://storage.googleapis.com/${file.bucket}/${file.name}`;
-      await ref.update({
-        clipUrl,
-        status: 'Enviar música'
-      });
-      console.log(`[${id}] clip listo → Enviar música`);
-    } catch (err) {
-      console.error(`[${id}] error subiendo clip:`, err);
-      await ref.update({ status: 'Error upload clip' });
-    }
+    // 4) Subir clip final y obtener Signed URL
+try {
+  // 4.1) Sube el archivo
+  const [file] = await bucket.upload(tmpWater, {
+    destination: `musica/clip/${id}-clip.mp3`,
+    metadata:    { contentType: 'audio/mpeg' }
+  });
+
+  // 4.2) Genera un signed URL con expiración de 24h
+  const [clipUrl] = await file.getSignedUrl({
+    action:  'read',
+    expires: Date.now() + 24 * 60 * 60 * 1000
+  });
+
+  // 4.3) Actualiza Firestore
+  await ref.update({
+    clipUrl,
+    status: 'Enviar música'
+  });
+
+  console.log(`[${id}] clip listo → Enviar música (URL firmada)`);
+} catch (err) {
+  console.error(`[${id}] error subiendo clip:`, err);
+  await ref.update({ status: 'Error upload clip' });
+}
+
 
     // Limpieza
     [tmpFull, tmpClip, watermarkTmp, tmpWater].forEach(f => {
