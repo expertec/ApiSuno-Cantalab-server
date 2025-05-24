@@ -183,7 +183,7 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
     await new Promise((resolve, reject) => {
       ffmpeg(tmpFull)
         .setStartTime(0)
-        .setDuration(35)
+        .setDuration(60)
         .output(tmpClip)
         .on('end', resolve)
         .on('error', reject)
@@ -206,7 +206,9 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
         .input(tmpClip)
         .input(watermarkTmp)
         .complexFilter([
-          '[1]adelay=1000|1000[beep];[0][beep]amix=inputs=2:duration=first'
+          // 1) Retardar la marca 1 s → 2) Bajar volumen al 0.3 → 3) Mezclar
+          '[1]adelay=1000|1000,volume=0.75[beep];' +
+          '[0][beep]amix=inputs=2:duration=first'
         ])
         .outputOptions('-ac 2')
         .output(tmpWater)

@@ -496,7 +496,7 @@ async function generarPromptParaMusica() {
 async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
   const url  = 'https://apibox.erweima.ai/api/v1/generate';
   const body = {
-    model:        "V4",
+    model:        "V4_5",
     customMode:   true,
     instrumental: false,
     title,
