@@ -17,6 +17,20 @@ function sanitizeParam(text) {
     .trim();
 }
 
+/**
+ * Trunca un texto para que su longitud, contando saltos de línea,
+ * nunca supere `maxLen - safetyMargin`. 
+ */
+function truncateToLimit(text, maxLen = 1024, safetyMargin = 5) {
+  // Si está dentro de los límites, devolvemos tal cual
+  if (text.length <= maxLen - safetyMargin) {
+    return text;
+  }
+  // Si excede, lo recortamos
+  return text.slice(0, maxLen - safetyMargin);
+}
+
+
 
 
 
@@ -46,7 +60,6 @@ function replacePlaceholders(template, leadData) {
       return leadData.letra || '';
     }
     return leadData[field] || '';
-  
   });
 }
 
@@ -105,13 +118,21 @@ export async function enviarMensaje(lead, mensaje) {
         break;
       }
       case 'template': {
-        const params = (mensaje.parameters || []).map(p => ({
-          type: 'text',
-          text: sanitizeParam(replacePlaceholders(p.value, lead))
-        }));
+        const params = (mensaje.parameters || []).map(p => {
+          // 1) sustituir placeholders
+          let txt = replacePlaceholders(p.value, lead);
+          // 2) limpiar espacios y saltos de línea sobrantes
+          txt = sanitizeParam(txt);
+          // 3) truncar a 5 caracteres menos del límite
+          txt = truncateToLimit(txt, 1024, 5);
+      
+          return { type: 'text', text: txt };
+        });
+      
         const components = params.length
           ? [{ type: 'body', parameters: params }]
           : [];
+      
         await sendTemplateMessage({
           to:           phone,
           templateName: mensaje.templateName,
