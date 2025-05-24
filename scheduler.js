@@ -389,16 +389,17 @@ async function generarLetraParaMusica() {
   if (snap.empty) return;
 
   const docSnap = snap.docs[0];
-  const d       = docSnap.data();
+  const data    = docSnap.data();
   const prompt = `
 Escribe una letra de canción con lenguaje simple siguiendo esta estructura:
 verso 1, verso 2, coro, verso 3, verso 4 y coro.
 Agrega título en negritas.
-Propósito: ${d.purpose}.
-Nombre: ${d.includeName}.
-Anecdotas: ${d.anecdotes}.
+Propósito: ${data.purpose}.
+Nombre: ${data.includeName}.
+Anécdotas: ${data.anecdotes}.
   `.trim();
 
+  // Generamos la letra con OpenAI
   const resp = await openai.createChatCompletion({
     model: 'gpt-4o',
     messages: [
@@ -410,13 +411,28 @@ Anecdotas: ${d.anecdotes}.
   const letra = resp.data.choices?.[0]?.message?.content?.trim();
   if (!letra) throw new Error(`No letra para ${docSnap.id}`);
 
+  // 1) Actualiza el documento en 'musica'
   await docSnap.ref.update({
     lyrics: letra,
     status: 'Sin prompt',
     lyricsGeneratedAt: FieldValue.serverTimestamp()
   });
-  console.log(`✅ generarLetraParaMusica: ${docSnap.id}`);
+  console.log(`✅ generarLetraParaMusica: letra generada para ${docSnap.id}`);
+
+  // 2) Guarda la letra también en el lead asociado
+  if (data.leadId) {
+    const leadRef = db.collection('leads').doc(data.leadId);
+    await leadRef.update({
+      letra,                                      // campo rápido para acceso
+      letraIds: FieldValue.arrayUnion(docSnap.id) // histórico de IDs
+    });
+    console.log(`✅ letra guardada en lead ${data.leadId}`);
+  } else {
+    console.warn(`⚠️ generarLetraParaMusica: no existe leadId en ${docSnap.id}`);
+  }
 }
+
+
 
 /**
  * Genera y refina automáticamente el prompt para Suno usando ChatGPT.
