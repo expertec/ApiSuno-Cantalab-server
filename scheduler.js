@@ -391,13 +391,11 @@ async function generarLetraParaMusica() {
   const docSnap = snap.docs[0];
   const data    = docSnap.data();
   const prompt = `
-Escribe una letra de canción con lenguaje simple siguiendo esta estructura:
-verso 1, verso 2, coro, verso 3, verso 4 y coro.
-Agrega título en negritas.
-Propósito: ${data.purpose}.
-Nombre: ${data.includeName}.
-Anécdotas: ${data.anecdotes}.
-  `.trim();
+Escribe una letra de canción con lenguaje simple que su estructura 
+sea verso 1, verso 2, coro, verso 3, verso 4 y coro. Agrega titulo
+ de la canción en negritas. No pongas datos personales que no se puedan confirmar. 
+ Agrega un coro cantable y memorable. Solo responde con la letra de la canción
+  sin texto adicional. Propósito: ${data.purpose}. Nombre:  ${data.includeName}. Frases/Recuerdos:  ${data.anecdotes}.`.trim();
 
   // Generamos la letra con OpenAI
   const resp = await openai.createChatCompletion({

@@ -159,7 +159,7 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
     const tmpClip = path.resolve('/tmp', `${taskId}-clip.mp3`);
     const tmpWater = path.resolve('/tmp', `${taskId}-watermarked.mp3`);
     // URL de marca de agua
-    const watermarkUrl = 'https://cantalab.com/wp-content/uploads/2025/05/audioMarcaCantalab.mp3';
+    const watermarkUrl = 'https://cantalab.com/wp-content/uploads/2025/05/marca-de-agua-1-minuto.mp3';
 
     // 4) Descargar MP3 completo
     const fullRes = await axios.get(audioUrlPrivada, { responseType: 'stream' });
