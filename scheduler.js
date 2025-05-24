@@ -142,37 +142,7 @@ export async function enviarMensaje(lead, mensaje) {
   }
 }
 
-/**
- * Genera letras, las guarda en colección 'letras' y en el propio Lead.
- */
-async function generateLetras() {
-  console.log("▶️ generateLetras: inicio");
-  const snap = await db.collection('letras')
-    .where('status', '==', 'Sin letra')
-    .get();
-  console.log(`✔️ encontrados ${snap.size}`);
-  for (const docSnap of snap.docs) {
-    const data = docSnap.data();
-    // ... tu prompt ...
-    const res = await openai.createChatCompletion(/* … */);
-    const letra = res.data.choices[0].message.content.trim();
-    if (!letra) continue;
 
-    // 1) Actualiza doc en 'letras'
-    await docSnap.ref.update({
-      letra,
-      status: 'enviarLetra',
-      letraGeneratedAt: FieldValue.serverTimestamp()
-    });
-
-    // 2) Además, copia la letra directamente al Lead
-    await db.collection('leads')
-      .doc(data.leadId)
-      .update({ letra });
-    console.log(`✅ letra guardada para lead ${data.leadId}`);
-  }
-  console.log("▶️ generateLetras: finalizado");
-}
 
 /**
  * Procesa las secuencias activas de cada lead.
@@ -237,7 +207,58 @@ async function processSequences() {
   }
 }
 
+/**
+ * Genera letras para los registros en 'letras' con status 'Sin letra',
+ * guarda la letra, marca status → 'enviarLetra' y añade marca de tiempo.
+ */
+async function generateLetras() {
+  console.log("▶️ generateLetras: inicio");
+  try {
+    const snap = await db.collection('letras')
+      .where('status', '==', 'Sin letra')
+      .get();
+    console.log(`✔️ generateLetras: encontrados ${snap.size} registros con status 'Sin letra'`);
+    
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data();
+      const leadId = data.leadId;
+      const prompt = `Escribe una letra de canción con lenguaje simple que su estructura sea verso 1, verso 2, coro, verso 3, verso 4 y coro. Agrega titulo de la canción en negritas. No pongas datos personales que no se puedan confirmar. Agrega un coro cantable y memorable. Solo responde con la letra de la canción sin texto adicional. Propósito: ${data.purpose}. Nombre: ${data.includeName}. Anecdotas o fraces: ${data.anecdotes}`;
+      console.log(`📝 prompt para ${docSnap.id}:\n${prompt}`);
 
+      const response = await openai.createChatCompletion({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'Eres un compositor creativo.' },
+          { role: 'user', content: prompt }
+        ]
+      });
+
+      const letra = response.data.choices?.[0]?.message?.content?.trim();
+      if (!letra) continue;
+
+      console.log(`✅ letra generada para ${docSnap.id}`);
+      // 1) Actualiza el doc en 'letras'
+      await docSnap.ref.update({
+        letra,
+        status: 'enviarLetra',
+        letraGeneratedAt: FieldValue.serverTimestamp()
+      });
+
+      // 2) Guarda la letra en el lead:
+      //    - actualiza un campo `letra` con el texto
+      //    - añade el ID de esta letra en un array `letraIds`
+      const leadRef = db.collection('leads').doc(leadId);
+      await leadRef.update({
+        letra,                                          // campo rápido para el acceso
+        letraIds: FieldValue.arrayUnion(docSnap.id)     // histórico de IDs
+      });
+    }
+
+    console.log("▶️ generateLetras: finalizado");
+  } catch (err) {
+    console.error("❌ Error generateLetras:", err);
+  }
+}
 
 
 /**
