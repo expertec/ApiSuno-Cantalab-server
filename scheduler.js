@@ -1,8 +1,6 @@
 // src/server/scheduler.js
 import { db } from './firebaseAdmin.js';
 import { sendTextMessage, sendAudioMessage, sendVideoMessage, sendTemplateMessage } from './whatsappService.js';
-
-
 import admin from 'firebase-admin';
 import { Configuration, OpenAIApi } from 'openai';
 import fetch from 'node-fetch';
@@ -11,8 +9,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
-
-
 
 
 const bucket = admin.storage().bucket();
@@ -436,13 +432,15 @@ async function generarLetraParaMusica() {
   if (snap.empty) return;
 
   const docSnap = snap.docs[0];
-  const data    = docSnap.data();
+  const d       = docSnap.data();
   const prompt = `
-Escribe una letra de canción con lenguaje simple que su estructura 
-sea verso 1, verso 2, coro, verso 3, verso 4 y coro. Agrega titulo
- de la canción en negritas. No pongas datos personales que no se puedan confirmar. 
- Agrega un coro cantable y memorable. Solo responde con la letra de la canción
-  sin texto adicional. Propósito: ${data.purpose}. Nombre:  ${data.includeName}. Frases/Recuerdos:  ${data.anecdotes}.`.trim();
+Escribe una letra de canción con lenguaje simple siguiendo esta estructura:
+verso 1, verso 2, coro, verso 3, verso 4 y coro.
+Agrega título en negritas.
+Propósito: ${d.purpose}.
+Nombre: ${d.includeName}.
+Anecdotas: ${d.anecdotes}.
+  `.trim();
 
   // Generamos la letra con OpenAI
   const resp = await openai.createChatCompletion({
