@@ -1,6 +1,7 @@
 // src/server/scheduler.js
 import { db } from './firebaseAdmin.js';
-import { sendTextMessage, sendAudioMessage, sendVideoMessage, sendTemplateMessage } from './whatsappService.js';
+import { sendTextMessage, sendAudioMessage, sendVideoMessage, sendTemplateMessage, sendDocumentMessage } from './whatsappService.js';
+
 import admin from 'firebase-admin';
 import { Configuration, OpenAIApi } from 'openai';
 import fetch from 'node-fetch';
@@ -160,6 +161,21 @@ export async function enviarMensaje(lead, mensaje) {
         await sendVideoMessage(phone, url);
         break;
       }
+      case 'document': {
+  // Reemplaza placeholders en la URL o contenido
+  const url = replacePlaceholders(mensaje.contenido || '', lead);
+
+  try {
+    // Envía el documento/PDF usando tu servicio de WhatsApp
+    await sendDocumentMessage(lead.telefono, url);
+    console.log(`Documento enviado a ${lead.telefono}: ${url}`);
+  } catch (err) {
+    console.error(`Error enviando documento a ${lead.telefono}:`, err);
+  }
+  break;
+}
+
+
       case 'template': {
         const params = (mensaje.parameters || []).map(p => {
           // 1) sustituir placeholders
