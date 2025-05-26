@@ -177,6 +177,7 @@ export async function sendDocumentMessage(phone, media) {
 }
 
 
+
   /**
  * Envía un mensaje de plantilla de WhatsApp con componentes dinámicos.
  */
