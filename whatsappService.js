@@ -140,18 +140,24 @@ export async function sendVideoMessage(phone, media) {
 /** Envía un documento (PDF, DOCX, etc.) por WhatsApp y lo guarda en Firestore. */
 export async function sendDocumentMessage(phone, media) {
   const to = normalize(phone);
-  const documentField = media.startsWith('http')
-    ? { link: media }
-    : { id: media };
 
+  // — Extraemos el nombre del archivo de la URL —
+  // Por ejemplo, ".../uploads/mi-archivo.pdf?token=..." → "mi-archivo.pdf"
+  const urlPath = media.split('?')[0];
+  const filename = decodeURIComponent(urlPath.substring(urlPath.lastIndexOf('/') + 1));
+
+  // — Llamada a WhatsApp Cloud API con filename —
   await callWhatsAppAPI('/messages', {
     messaging_product: 'whatsapp',
     to,
     type: 'document',
-    document: documentField
+    document: {
+      link: media,
+      filename
+    }
   });
 
-  // Guardar en Firestore
+  // — Guardar en Firestore igual que con audio y video —
   const q = await db.collection('leads')
                   .where('telefono', '==', to)
                   .limit(1)
@@ -169,6 +175,7 @@ export async function sendDocumentMessage(phone, media) {
     await db.collection('leads').doc(leadId).update({ lastMessageAt: msgData.timestamp });
   }
 }
+
 
   /**
  * Envía un mensaje de plantilla de WhatsApp con componentes dinámicos.
