@@ -121,54 +121,61 @@ app.post(
   }
 );
 
+// server.js
+
 app.post('/api/suno/callback', express.json(), async (req, res) => {
   const raw    = req.body;
   const taskId = raw.taskId || raw.data?.taskId || raw.data?.task_id;
   if (!taskId) return res.sendStatus(400);
 
-  const item = Array.isArray(raw.data?.data)
-    ? raw.data.data.find(i => i.audio_url || i.source_audio_url)
-    : null;
-  const audioUrlPrivada = item?.audio_url || item?.source_audio_url;
-  if (!audioUrlPrivada) return res.sendStatus(200);
-
+  // Buscamos el doc de Firestore
   const snap = await db.collection('musica')
     .where('taskId', '==', taskId)
-    .limit(1)
-    .get();
+    .limit(1).get();
   if (snap.empty) return res.sendStatus(404);
   const docRef = snap.docs[0].ref;
 
   try {
-    // Descargar y subir solo el MP3 completo
-    const tmpFull = path.join(os.tmpdir(), `${taskId}-full.mp3`);
-    const r = await axios.get(audioUrlPrivada, { responseType: 'stream' });
-    await new Promise((ok, ko) => {
-      const ws = fs.createWriteStream(tmpFull);
-      r.data.pipe(ws);
-      ws.on('finish', ok);
-      ws.on('error', ko);
-    });
+    // 1) Aseguramos que data.audio_url sea siempre un array
+    const urls = Array.isArray(raw.data?.audio_url)
+      ? raw.data.audio_url
+      : [raw.data?.audio_url || raw.data?.source_audio_url].filter(Boolean);
 
-    const dest = `musica/full/${taskId}.mp3`;
-    await bucket.upload(tmpFull, { destination: dest, metadata: { contentType: 'audio/mpeg' } });
-    const [fullUrl] = await bucket.file(dest)
-      .getSignedUrl({ action: 'read', expires: Date.now() + 86400_000 });
+    const fullUrls = [];
+    for (let i = 0; i < urls.length; i++) {
+      const urlPriv = urls[i];
+      const tmpPath = path.join(os.tmpdir(), `${taskId}-full-${i}.mp3`);
+      // Descarga
+      const r = await axios.get(urlPriv, { responseType:'stream' });
+      await new Promise((ok, ko) => {
+        const ws = fs.createWriteStream(tmpPath);
+        r.data.pipe(ws);
+        ws.on('finish', ok); ws.on('error', ko);
+      });
+      // Sube a Storage
+      const dest = `musica/full/${taskId}-${i}.mp3`;
+      await bucket.upload(tmpPath, { destination: dest, metadata:{ contentType:'audio/mpeg' } });
+      const [signed] = await bucket.file(dest)
+        .getSignedUrl({ action:'read', expires: Date.now()+86400_000 });
+      fullUrls.push(signed);
+      fs.unlinkSync(tmpPath);
+    }
 
-    // Marca el doc para que procesarClips() lo recoja
+    // 2) Guardamos el array de URLs y marcamos listo
     await docRef.update({
-      fullUrl,
+      fullUrls,              // ahora es un array de 1 o 2 URLs
       status: 'Audio listo',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: FieldValue.serverTimestamp()
     });
-    fs.unlink(tmpFull, () => {});
+
     return res.sendStatus(200);
   } catch (err) {
     console.error('❌ callback Suno error:', err);
-    await docRef.update({ status: 'Error música', errorMsg: err.message });
+    await docRef.update({ status:'Error música', errorMsg: err.message });
     return res.sendStatus(500);
   }
 });
+
 
 
 
@@ -385,7 +392,7 @@ if (msg.image || msg.document || msg.audio) {
             lastMessageAt: new Date()
           });
         }
-
+        const timestamp = admin.firestore.FieldValue.serverTimestamp();
         // 2) Guardar mensaje en subcolección
         const msgData = {
           content:   text,
@@ -398,6 +405,13 @@ if (msg.image || msg.document || msg.audio) {
                 .doc(leadId)
                 .collection('messages')
                 .add(msgData);
+
+         // Actualiza hora del último mensaje DEL LEAD
+         await db.collection('leads')
+                .doc(leadId)
+                .update({
+                lastLeadMessageAt: timestamp
+         });        
       }
     }
 
