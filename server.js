@@ -437,12 +437,17 @@ app.get('/api/media', async (req, res) => {
 /**
  * Endpoint para enviar plantilla de WhatsApp
  */
+// Asegúrate de tener al inicio de server.js:
+// import { sendTemplateMessage } from './whatsappService.js';
+
 app.post('/api/whatsapp/send-template', async (req, res) => {
   console.log('[DEBUG] POST /api/whatsapp/send-template', req.body);
-  const { leadId, templateName, language } = req.body;
+  const { leadId, templateName, language, variables } = req.body;
+
   if (!leadId || !templateName) {
     return res.status(400).json({ error: 'Faltan leadId o templateName' });
   }
+
   try {
     // 1) Obtener teléfono del lead
     const leadSnap = await db.collection('leads').doc(leadId).get();
@@ -451,24 +456,38 @@ app.post('/api/whatsapp/send-template', async (req, res) => {
     }
     const phone = leadSnap.data().telefono;
 
-    // 2) Disparar plantilla sin componentes
+    // 2) Construir components para la plantilla (body params)
+    const components = [];
+    if (variables && variables.nombre) {
+      components.push({
+        type: 'body',
+        parameters: [
+          { type: 'text', text: variables.nombre }
+        ]
+      });
+    }
+
+    // 3) Enviar la plantilla a través de WhatsApp Cloud API
     await sendTemplateMessage({
       to: phone,
       templateName,
       language,
-      components: []  // si tu plantilla tiene variables, aquí las agregas
+      components
     });
 
-    // 3) Registrar en Firestore
+    // 4) Registrar el envío en Firestore
     await db.collection('leads')
       .doc(leadId)
       .collection('messages')
       .add({
         content: `Plantilla ${templateName} enviada`,
         template: templateName,
+        variables: variables || {},
         sender: 'business',
         timestamp: new Date()
       });
+
+    // 5) Actualizar timestamp de último mensaje
     await db.collection('leads').doc(leadId)
       .update({ lastMessageAt: new Date() });
 
@@ -478,6 +497,7 @@ app.post('/api/whatsapp/send-template', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
